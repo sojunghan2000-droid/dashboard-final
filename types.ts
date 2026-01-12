@@ -7,6 +7,7 @@ export type Reply = {
   text: string;
   timestamp: string; // YYYY-MM-DD HH:mm
   checked?: boolean; // 확인 여부
+  author?: string; // 작성자 이름
 };
 
 export type Issue = { 
@@ -20,7 +21,7 @@ export type Issue = {
 export type Period = { 
   startDate: string | null; 
   endDate: string | null; 
-  hours: number 
+  hours: string // hh.mm 형식 (예: "08.30" = 8시간 30분)
 };
 
 export type Revision = { 
@@ -49,7 +50,7 @@ export type Task = {
   monthlyIssues: Issue[];
   status: TaskStatus;
   isActive?: boolean; // [핵심] 숨김/활성 상태 관리 (undefined or true: 활성, false: 숨김)
-  dailyLogs?: { [date: string]: number };
+  dailyLogs?: { [date: string]: string }; // hh.mm 형식 (예: "08.30" = 8시간 30분)
 };
 
 export type Member = { 
@@ -83,7 +84,8 @@ export type Team = {
   id: string; 
   name: string; 
   groups: Group[]; 
-  categoryMaster: CategoryMaster; 
+  categoryMaster: CategoryMaster;
+  obsMaster?: CategoryMaster; // OBS 관리 데이터 (업무 구분과 분리)
 };
 
 export type Department = { 
@@ -139,4 +141,5 @@ export type NewTaskFormData = {
   plannedEnd: string;
   plannedDailyHours: string;
   plannedHours: string;
+  taskCode?: string; // 선택적 Task Code 입력
 };

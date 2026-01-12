@@ -45,3 +45,81 @@ export const getTodayStr = (): string => {
   const kstOffset = 9 * 60 * 60 * 1000;
   return new Date(today.getTime() + kstOffset).toISOString().split('T')[0];
 };
+
+// MH 관련 유틸리티 함수 (hh.mm 형식)
+// 숫자(시간)를 hh.mm 형식 문자열로 변환
+export const numberToHHMM = (hours: number): string => {
+  if (isNaN(hours) || hours < 0) return '00.00';
+  
+  // 소수점 세 자리 이상 버림
+  const truncated = Math.floor(hours * 100) / 100;
+  
+  const totalMinutes = Math.floor(truncated * 60);
+  let h = Math.floor(totalMinutes / 60);
+  let m = totalMinutes % 60;
+  
+  // 60분이면 1시간으로 올림
+  if (m >= 60) {
+    h += Math.floor(m / 60);
+    m = m % 60;
+  }
+  
+  return `${String(h).padStart(2, '0')}.${String(m).padStart(2, '0')}`;
+};
+
+// hh.mm 형식 문자열을 숫자(시간)로 변환 (계산용)
+export const hhmmToNumber = (hhmm: string): number => {
+  if (!hhmm || typeof hhmm !== 'string') return 0;
+  
+  const parts = hhmm.trim().split('.');
+  if (parts.length !== 2) return 0;
+  
+  const h = parseInt(parts[0], 10) || 0;
+  let m = parseInt(parts[1], 10) || 0;
+  
+  // mm이 60 이상이면 시간으로 변환
+  if (m >= 60) {
+    const additionalHours = Math.floor(m / 60);
+    m = m % 60;
+    return h + additionalHours + (m / 60);
+  }
+  
+  return h + (m / 60);
+};
+
+// hh.mm 형식 검증 (입력 중 허용, mm이 60 초과해도 허용 - normalizeHHMM에서 자동 변환)
+export const validateHHMM = (hhmm: string, strict: boolean = false): boolean => {
+  if (!hhmm || typeof hhmm !== 'string') return false;
+  
+  const parts = hhmm.trim().split('.');
+  if (parts.length !== 2) return false;
+  
+  const h = parseInt(parts[0], 10);
+  const m = parseInt(parts[1], 10);
+  
+  if (isNaN(h) || isNaN(m)) return false;
+  if (h < 0) return false;
+  
+  // strict 모드에서는 mm이 60 초과 불가, 일반 모드에서는 허용 (자동 변환됨)
+  if (strict && (m < 0 || m > 60)) return false;
+  if (m < 0) return false;
+  
+  return true;
+};
+
+// hh.mm 형식 정규화 (60mm를 1h로 변환, 소수점 세 자리 이상 버림)
+export const normalizeHHMM = (hhmm: string): string => {
+  if (!validateHHMM(hhmm)) return '00.00';
+  
+  const parts = hhmm.trim().split('.');
+  let h = parseInt(parts[0], 10) || 0;
+  let m = parseInt(parts[1], 10) || 0;
+  
+  // 60분이면 1시간으로 올림
+  if (m >= 60) {
+    h += Math.floor(m / 60);
+    m = m % 60;
+  }
+  
+  return `${String(h).padStart(2, '0')}.${String(m).padStart(2, '0')}`;
+};

@@ -14,6 +14,7 @@ import type {
   Revision,
   Period
 } from './types';
+import { numberToHHMM, normalizeHHMM } from './utils';
 
 // --- Mappings & Master Data ---
 
@@ -47,6 +48,18 @@ export const orgCodeMapping = {
     '클라우드인프라그룹': 'CIG', 
     'ENG혁신지원그룹': 'PSG'
   }
+};
+
+// OBS 코드 매핑 (OBS Code Mapping)
+export const obsCodeMapping = {
+  lv1: {
+    '1. 중점과제': 'O01',
+    '2. 지시과제': 'O02',
+    '3. 자체과제': 'O03',
+    '4. 기타': 'O04'
+  },
+  // Lv.2는 팀 이름에 따라 동적으로 생성 (orgCodeMapping.teams 사용)
+  // Lv.3는 업무 구분 Lv.3 코드 사용 (categoryCodeMapping 사용)
 };
 
 // 업무 카테고리 마스터 데이터 (Category Master Data)
@@ -189,7 +202,7 @@ export const generateAllTasks = (organization: Organization): Task[] => {
           period: { 
             startDate: formatDate(plannedStartDate), 
             endDate: formatDate(newEndDate), 
-            hours: plannedHours + 40 
+            hours: normalizeHHMM(numberToHHMM(plannedHours + 40))
           } 
         });
       }
@@ -209,13 +222,13 @@ export const generateAllTasks = (organization: Organization): Task[] => {
         planned: { 
           startDate: formatDate(plannedStartDate), 
           endDate: formatDate(plannedEndDate), 
-          hours: Math.round(plannedHours) 
+          hours: normalizeHHMM(numberToHHMM(plannedHours))
         }, 
         revisions, 
         actual: { 
           startDate: formatDate(actualStartDate), 
           endDate: formatDate(actualEndDate), 
-          hours: Math.max(0, Math.round(actualHours)) 
+          hours: normalizeHHMM(numberToHHMM(Math.max(0, actualHours)))
         }, 
         monthlyIssues, 
         status, 
@@ -224,6 +237,37 @@ export const generateAllTasks = (organization: Organization): Task[] => {
     }
   }
   return tasks;
+};
+
+// OBS 마스터 초기 데이터 생성 함수
+const createInitialOBSMaster = (teamName: string): CategoryMaster => {
+  const FIXED_LV1_OPTIONS = ["1. 중점과제", "2. 지시과제", "3. 자체과제", "4. 기타"];
+  const obsMaster: CategoryMaster = {};
+  
+  // 고정 Lv.1 옵션 초기화
+  FIXED_LV1_OPTIONS.forEach(lv1 => {
+    obsMaster[lv1] = {};
+    // 각 팀에 대해 기본적으로 "3. 자체과제"에 업무 구분 Lv.3 일부 항목 추가
+    if (lv1 === "3. 자체과제") {
+      // 업무 구분 마스터에서 Lv.3 소분류 추출하여 초기 데이터로 사용
+      const initialLv3Items: string[] = [];
+      Object.values(categoryMasterData).forEach(lv2Obj => {
+        Object.values(lv2Obj).forEach((lv3Array: string[]) => {
+          if (Array.isArray(lv3Array)) {
+            lv3Array.forEach(lv3 => {
+              if (!initialLv3Items.includes(lv3)) {
+                initialLv3Items.push(lv3);
+              }
+            });
+          }
+        });
+      });
+      // 팀별로 초기 OBS 마스터 데이터 설정
+      obsMaster[lv1][teamName] = initialLv3Items.slice(0, 10).sort(); // 처음 10개만 선택
+    }
+  });
+  
+  return obsMaster;
 };
 
 // 조직 데이터 초기화 및 카테고리 매핑
@@ -250,7 +294,8 @@ const initialOrganizationData: Organization = {
             members: [{ id: 'emp09', name: '임서준', position: '선임연구원' }] 
           }
         ], 
-        categoryMaster: JSON.parse(JSON.stringify(categoryMasterData))
+        categoryMaster: JSON.parse(JSON.stringify(categoryMasterData)),
+        obsMaster: createInitialOBSMaster('AI개발팀')
       }, 
       { 
         id: 'team2', 
@@ -260,7 +305,8 @@ const initialOrganizationData: Organization = {
           name: 'TA그룹', 
           members: [{ id: 'emp25', name: '정태영', position: '책임연구원' }] 
         }], 
-        categoryMaster: JSON.parse(JSON.stringify(categoryMasterData)) 
+        categoryMaster: JSON.parse(JSON.stringify(categoryMasterData)),
+        obsMaster: createInitialOBSMaster('TA팀')
       }, 
       { 
         id: 'team3', 
@@ -270,7 +316,8 @@ const initialOrganizationData: Organization = {
           name: '융합S/W그룹', 
           members: [{ id: 'emp28', name: '박지수', position: '수석연구원' }] 
         }], 
-        categoryMaster: JSON.parse(JSON.stringify(categoryMasterData)) 
+        categoryMaster: JSON.parse(JSON.stringify(categoryMasterData)),
+        obsMaster: createInitialOBSMaster('융합기술팀')
       }, 
       { 
         id: 'team4', 
@@ -280,7 +327,8 @@ const initialOrganizationData: Organization = {
           name: '클라우드인프라그룹', 
           members: [{ id: 'emp30', name: '김하은', position: '책임연구원' }] 
         }], 
-        categoryMaster: JSON.parse(JSON.stringify(categoryMasterData)) 
+        categoryMaster: JSON.parse(JSON.stringify(categoryMasterData)),
+        obsMaster: createInitialOBSMaster('기반기술팀')
       }, 
       { 
         id: 'team5', 
@@ -295,7 +343,8 @@ const initialOrganizationData: Organization = {
             { id: 'a', name: '소중한', position: '프로' }
           ] 
         }], 
-        categoryMaster: JSON.parse(JSON.stringify(categoryMasterData)) 
+        categoryMaster: JSON.parse(JSON.stringify(categoryMasterData)),
+        obsMaster: createInitialOBSMaster('ENG혁신지원그룹')
       }
     ] 
   }] 
@@ -336,7 +385,8 @@ export const organizationData: Organization = {
     ...dept, 
     teams: dept.teams.map((team: Team) => ({ 
       ...team, 
-      categoryMaster: JSON.parse(JSON.stringify(categoryMasterData)) 
+      categoryMaster: JSON.parse(JSON.stringify(categoryMasterData)),
+      obsMaster: team.obsMaster || createInitialOBSMaster(team.name)
     })) 
   })) 
 };

@@ -33,18 +33,21 @@ import {
   categoryMasterData, 
   categoryCodeMapping, 
   orgCodeMapping, 
+  obsCodeMapping,
   organizationData, 
   sampleData 
 } from './data';
 
 // --- Utilities ---
-import { calculateWorkingDays, koreanHolidays } from './utils';
+import { calculateWorkingDays, koreanHolidays, numberToHHMM, hhmmToNumber, validateHHMM, normalizeHHMM } from './utils';
 
 // --- Components ---
 import { TaskRegistrationModal } from './TaskRegistrationModal';
 
+// --- External Libraries ---
+import * as XLSX from 'xlsx';
+
 declare const Chart: any;
-declare const XLSX: any;
 
 
 
@@ -71,7 +74,7 @@ const dateDiffInDays = (dateStr1: string, dateStr2: string) => { const dt1 = new
 
 const getCurrentPlan = (task: Task) => { if (task.revisions.length > 0) return task.revisions[task.revisions.length - 1].period; return task.planned; };
 
-const distributeHoursByMonth = (start: string | null, end: string | null, totalHours: number, year: number) => { const distribution = Array(12).fill(0); if (!start || !end || totalHours <= 0) return distribution; const s = new Date(start); const e = new Date(end); if (s > e) return distribution; const oneDay = 24 * 60 * 60 * 1000; const diffDays = Math.max(1, Math.round(Math.abs((e.getTime() - s.getTime()) / oneDay)) + 1); const hoursPerDay = totalHours / diffDays; let current = new Date(s); while (current <= e) { if (current.getFullYear() === year) { distribution[current.getMonth()] += hoursPerDay; } current.setDate(current.getDate() + 1); } return distribution.map(h => Math.round(h)); };
+const distributeHoursByMonth = (start: string | null, end: string | null, totalHours: string, year: number) => { const distribution = Array(12).fill(0); if (!start || !end || !totalHours) return distribution; const hoursNum = hhmmToNumber(totalHours); if (hoursNum <= 0) return distribution; const s = new Date(start); const e = new Date(end); if (s > e) return distribution; const oneDay = 24 * 60 * 60 * 1000; const diffDays = Math.max(1, Math.round(Math.abs((e.getTime() - s.getTime()) / oneDay)) + 1); const hoursPerDay = hoursNum / diffDays; let current = new Date(s); while (current <= e) { if (current.getFullYear() === year) { distribution[current.getMonth()] += hoursPerDay; } current.setDate(current.getDate() + 1); } return distribution.map(h => Math.round(h)); };
 
 const filterTasksByDateRange = (tasks: Task[], startMonth: string, endMonth: string) => { if (!startMonth || !endMonth) return tasks; return tasks.filter(t => { const currentPlan = getCurrentPlan(t); const pStart = currentPlan.startDate ? currentPlan.startDate.substring(0, 7) : ''; const pEnd = currentPlan.endDate ? currentPlan.endDate.substring(0, 7) : ''; if (!pStart || !pEnd) return false; return pStart >= startMonth && pEnd <= endMonth; }); };
 
@@ -86,6 +89,14 @@ const LoginView = ({ onLogin, organization }: { onLogin: (user: UserContextType)
   const [id, setId] = useState('');
   const [pw, setPw] = useState('');
   const [error, setError] = useState('');
+  const idInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    // 컴포넌트가 마운트될 때 아이디 입력 필드에 자동 포커스
+    if (idInputRef.current) {
+      idInputRef.current.focus();
+    }
+  }, []);
 
   const handleLogin = () => {
     // 1. 하드코딩된 슈퍼 어드민 (비상용)
@@ -131,6 +142,7 @@ const LoginView = ({ onLogin, organization }: { onLogin: (user: UserContextType)
         <div className="form-group">
           <label className="form-label">아이디</label>
           <input 
+            ref={idInputRef}
             type="text" 
             className="form-input" 
             value={id} 
@@ -185,32 +197,66 @@ const ChartCanvas = React.memo(({ type, data, options, height, plugins }: { type
   return <div style={{ height: height || '100%', width: '100%', position: 'relative' }}><canvas ref={canvasRef} /></div>;
 });
 
-const TaskRow = React.memo(({ task, onEdit, onOpenIssueModal, onToggleActive }: { task: Task, onEdit: (task: Task) => void, onOpenIssueModal: () => void, onToggleActive: (id: string, isActive: boolean) => void }) => {
+const TaskRow = React.memo(({ task, onEdit, onOpenIssueModal, onToggleActive, onOpenRevisionModal }: { task: Task, onEdit: (task: Task) => void, onOpenIssueModal: () => void, onToggleActive: (id: string, isActive: boolean) => void, onOpenRevisionModal: (task: Task) => void }) => {
   const progress = useMemo(() => {
     const currentPlan = getCurrentPlan(task);
     if (task.status === 'completed') return 100;
-    if (!currentPlan.hours || currentPlan.hours === 0) return 0;
-    return Math.min(100, Math.round((task.actual.hours / currentPlan.hours) * 100));
+    const planHours = hhmmToNumber(currentPlan.hours);
+    const actualHours = hhmmToNumber(task.actual.hours);
+    if (!planHours || planHours === 0) return 0;
+    return Math.min(100, Math.round((actualHours / planHours) * 100));
   }, [task]);
   const statusMap: { [key in TaskStatus]: { text: string; className: string } } = { 'completed': { text: '완료', className: 'status-completed' }, 'in-progress': { text: '진행중', className: 'status-progress' }, 'delayed': { text: '지연', className: 'status-delayed' }, 'not-started': { text: '미시작', className: 'status-pending' } };
   const unreviewedIssueCount = task.monthlyIssues.filter(issue => !issue.reviewed).length;
+  const revisionCount = task.revisions ? task.revisions.length : 0;
   const currentPlan = getCurrentPlan(task);
   const isActive = task.isActive !== false;
   return (
     <tr data-task-id={task.id} className={!isActive ? 'inactive-task' : ''}>
-      <td>
-        <div style={{ fontSize: '0.8em', color: '#6c757d', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={task.taskCode}>{task.taskCode}</div>
-        <div style={{ position: 'relative', height: '8px', background: '#e9ecef', borderRadius: '4px', overflow: 'hidden', marginTop: '4px' }}><div style={{ width: `${progress}%`, height: '100%', background: '#28a745', transition: 'width 0.3s' }}></div></div>
+      <td className="actions-cell"><button className="btn-action edit" onClick={() => onEdit(task)} title="수정">✏️</button></td>
+      <td className="revision-cell" style={{ textAlign: 'center' }}>
+        <button 
+          className="issue-icon" 
+          onClick={() => onOpenIssueModal()}
+          title="이슈 관리"
+        >
+          💬
+          {unreviewedIssueCount > 0 && (
+            <span className="unreviewed-issue-count">{unreviewedIssueCount}</span>
+          )}
+        </button>
       </td>
-      <td><div style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={task.category1}>{task.category1}</div><div style={{ fontSize: '0.8em', color: '#6c757d', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={`${task.category2} > ${task.category3}`}>{task.category2} &gt; {task.category3}</div></td>
+      <td><div style={{ fontSize: '0.8em', color: '#6c757d', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={task.taskCode}>{task.taskCode}</div></td>
+      <td><div style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={task.category1}>{task.category1}</div></td>
+      <td><div style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={task.category2}>{task.category2}</div></td>
+      <td><div style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={task.category3}>{task.category3}</div></td>
       <td><div style={{ wordBreak: 'break-all' }}>{task.name}</div></td>
       <td><div style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={task.assigneeName}>{task.assigneeName}</div></td>
-      <td><div style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={task.team}>{task.team}</div><div style={{ fontSize: '0.8em', color: '#6c757d', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={task.group}>{task.group}</div></td>
-      <td><div style={{ whiteSpace: 'nowrap' }}>{currentPlan.startDate} ~</div><div style={{ whiteSpace: 'nowrap' }}>{currentPlan.endDate}</div><div style={{ fontSize: '0.8em', color: '#6c757d' }}>{currentPlan.hours}h</div></td>
-      <td><div style={{ whiteSpace: 'nowrap' }}>{task.actual.startDate || '-'} ~</div><div style={{ whiteSpace: 'nowrap' }}>{task.actual.endDate || '-'}</div><div style={{ fontSize: '0.8em', color: '#6c757d' }}>{task.actual.hours}h</div></td>
+      <td>
+        <div style={{ fontSize: '0.85em', lineHeight: '1.4' }}>
+          <div style={{ whiteSpace: 'nowrap' }}>{currentPlan.startDate || '-'} ~</div>
+          <div style={{ whiteSpace: 'nowrap', marginTop: '2px' }}>{currentPlan.endDate || '-'}</div>
+          <div style={{ fontSize: '0.8em', color: '#6c757d', marginTop: '2px' }}>{currentPlan.hours}</div>
+        </div>
+      </td>
+      <td>
+        <div style={{ fontSize: '0.85em', lineHeight: '1.4' }}>
+          <div style={{ whiteSpace: 'nowrap' }}>{task.actual.startDate || '-'} ~</div>
+          <div style={{ whiteSpace: 'nowrap', marginTop: '2px' }}>{task.actual.endDate || '-'}</div>
+          <div style={{ fontSize: '0.8em', color: '#6c757d', marginTop: '2px' }}>{task.actual.hours}</div>
+        </div>
+      </td>
+      <td><div style={{ whiteSpace: 'nowrap', fontSize: '0.85em' }}>{`${progress}%`}</div></td>
       <td className="status-cell"><span className={`status-badge ${statusMap[task.status].className}`}>{statusMap[task.status].text}</span></td>
-      <td className="issue-cell"><button className={`issue-icon ${task.monthlyIssues.length > 0 ? 'has-issues' : 'add-issue'}`} onClick={onOpenIssueModal} title={task.monthlyIssues.length > 0 ? "이슈 보기" : "이슈 추가"}>{task.monthlyIssues.length > 0 ? '💬' : ''}{unreviewedIssueCount > 0 && <span className="unreviewed-issue-count">{unreviewedIssueCount}</span>}</button></td>
-      <td className="actions-cell"><button className="btn-action edit" onClick={() => onEdit(task)} title="수정">✏️</button><button className={`btn-action toggle-active ${isActive ? 'active' : ''}`} onClick={() => onToggleActive(task.id, isActive)} title={isActive ? '비활성화' : '활성화'}>{isActive ? '👁️' : '👁️‍🗨️'}</button></td>
+      <td className="actions-cell" style={{ textAlign: 'center' }}>
+        <button 
+          className={`btn-action toggle-active ${isActive ? 'active' : ''}`} 
+          onClick={() => onToggleActive(task.id, isActive)} 
+          title={isActive ? '비활성화' : '활성화'}
+        >
+          {isActive ? '👁️' : '👁️‍🗨️'}
+        </button>
+      </td>
     </tr>
   );
 });
@@ -222,8 +268,8 @@ const calculateMonthlyTrends = (tasks: Task[], year: number) => {
   const actualTrend = new Array(months.length).fill(0);
   tasks.forEach(task => {
     const plan = getCurrentPlan(task);
-    if (plan.startDate) { const m = plan.startDate.slice(0, 7); const idx = months.indexOf(m); if (idx >= 0) plannedTrend[idx] += plan.hours; }
-    if (task.actual.startDate) { const m = task.actual.startDate.slice(0, 7); const idx = months.indexOf(m); if (idx >= 0) actualTrend[idx] += task.actual.hours; }
+    if (plan.startDate) { const m = plan.startDate.slice(0, 7); const idx = months.indexOf(m); if (idx >= 0) plannedTrend[idx] += hhmmToNumber(plan.hours); }
+    if (task.actual.startDate) { const m = task.actual.startDate.slice(0, 7); const idx = months.indexOf(m); if (idx >= 0) actualTrend[idx] += hhmmToNumber(task.actual.hours); }
   });
   for (let i = 1; i < months.length; i++) { plannedTrend[i] += plannedTrend[i - 1]; actualTrend[i] += actualTrend[i - 1]; }
   return { labels: months, planned: plannedTrend, actual: actualTrend };
@@ -629,8 +675,8 @@ const MemberDashboardV2: React.FC<{ tasks: Task[], startMonth: string, endMonth:
   const completedCount = filteredTasks.filter(t => t.status === 'completed').length;
   const totalCount = filteredTasks.length;
   const completionRate = totalCount > 0 ? ((completedCount / totalCount) * 100).toFixed(0) : '0';
-  const totalPlanHours = filteredTasks.reduce((sum, t) => sum + getCurrentPlan(t).hours, 0);
-  const totalActualHours = filteredTasks.reduce((sum, t) => sum + t.actual.hours, 0);
+  const totalPlanHours = filteredTasks.reduce((sum, t) => sum + hhmmToNumber(getCurrentPlan(t).hours), 0);
+  const totalActualHours = filteredTasks.reduce((sum, t) => sum + hhmmToNumber(t.actual.hours), 0);
   const hourRatio = totalPlanHours > 0 ? ((totalActualHours / totalPlanHours) * 100).toFixed(0) : '0';
 
   const calendarBase = useMemo(() => {
@@ -658,10 +704,10 @@ const MemberDashboardV2: React.FC<{ tasks: Task[], startMonth: string, endMonth:
   const { workloadData, filteredTotalPlan, filteredTotalActual } = useMemo(() => {
     const workloadTasks = filteredTasks.filter(t => { if (workloadFilter === 'all') return true; if (workloadFilter === 'active') return ['in-progress', 'delayed'].includes(t.status); if (workloadFilter === 'completed') return t.status === 'completed'; return true; });
     const categoryStats: { [key: string]: { plan: number, actual: number } } = {};
-    workloadTasks.forEach(task => { const cat = `${task.category1} (${(categoryCodeMapping.category1 as any)[task.category1] || 'ETC'})`; if (!categoryStats[cat]) categoryStats[cat] = { plan: 0, actual: 0 }; categoryStats[cat].plan += getCurrentPlan(task).hours; categoryStats[cat].actual += task.actual.hours; });
+    workloadTasks.forEach(task => { const cat = `${task.category1} (${(categoryCodeMapping.category1 as any)[task.category1] || 'ETC'})`; if (!categoryStats[cat]) categoryStats[cat] = { plan: 0, actual: 0 }; categoryStats[cat].plan += hhmmToNumber(getCurrentPlan(task).hours); categoryStats[cat].actual += hhmmToNumber(task.actual.hours); });
     const labels = Object.keys(categoryStats);
     const data = { labels: labels, datasets: [{ label: '계획시수', data: labels.map(l => categoryStats[l].plan), backgroundColor: '#6f42c1' }, { label: '실적시수', data: labels.map(l => categoryStats[l].actual), backgroundColor: '#28a745' }] };
-    const fTotalPlan = workloadTasks.reduce((sum, t) => sum + getCurrentPlan(t).hours, 0); const fTotalActual = workloadTasks.reduce((sum, t) => sum + t.actual.hours, 0);
+    const fTotalPlan = workloadTasks.reduce((sum, t) => sum + hhmmToNumber(getCurrentPlan(t).hours), 0); const fTotalActual = workloadTasks.reduce((sum, t) => sum + hhmmToNumber(t.actual.hours), 0);
     return { workloadData: data, filteredTotalPlan: fTotalPlan, filteredTotalActual: fTotalActual };
   }, [filteredTasks, workloadFilter]);
 
@@ -912,6 +958,9 @@ const UserManagementTab = ({ organization, onUpdateOrg }: { organization: Organi
   const [editingMember, setEditingMember] = useState<any | null>(null);
   const [isAddModalOpen, setAddModalOpen] = useState(false);
   const [newUser, setNewUser] = useState({ name: '', loginId: '', password: '123', position: '선임연구원', role: 'member', deptId: '', teamId: '', groupId: '' });
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [uploadErrors, setUploadErrors] = useState<string[]>([]);
+  const [isErrorModalOpen, setIsErrorModalOpen] = useState(false);
 
   const availableTeams = useMemo(() => {
     if (!newUser.deptId) return [];
@@ -976,11 +1025,169 @@ const UserManagementTab = ({ organization, onUpdateOrg }: { organization: Organi
     }
   };
 
+  const handleDownloadTemplate = () => {
+    const wsData = [['*이름', '*ID', '*비밀번호', '*실', '*팀', '*그룹', '직책', '권한']];
+    
+    // 현재 마스터 데이터를 엑셀 데이터로 변환
+    allMembers.forEach(member => {
+      wsData.push([
+        member.name,
+        member.loginId,
+        member.password || '',
+        member.deptName,
+        member.teamName,
+        member.groupName,
+        member.position,
+        member.role === 'admin' ? '관리자' : member.role === 'team_leader' ? '팀장' : member.role === 'group_leader' ? '그룹장' : '팀원'
+      ]);
+    });
+    
+    const ws = XLSX.utils.aoa_to_sheet(wsData);
+    ws['!cols'] = [{ wch: 15 }, { wch: 15 }, { wch: 15 }, { wch: 15 }, { wch: 15 }, { wch: 15 }, { wch: 15 }, { wch: 10 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "User_List");
+    XLSX.writeFile(wb, `User_Master_Data.xlsx`);
+  };
+
+  const handleExcelUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.readAsArrayBuffer(file);
+
+    reader.onload = (event) => {
+      try {
+        const data = event.target?.result;
+        if (!data) return;
+
+        const workbook = XLSX.read(data, { type: 'array' });
+        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+        const jsonData = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false }) as any[][];
+
+        if (!jsonData || jsonData.length < 2) {
+          alert('엑셀 파일에 데이터가 없습니다.');
+          if (fileInputRef.current) fileInputRef.current.value = '';
+          return;
+        }
+
+        // 헤더 제외하고 데이터 파싱
+        const uploadData = jsonData.slice(1);
+        const newOrg = JSON.parse(JSON.stringify(organization));
+        const errors: string[] = [];
+        let addedCount = 0;
+        let skippedCount = 0;
+
+        // 기존 ID 목록 생성
+        const existingLoginIds = new Set<string>();
+        allMembers.forEach(m => {
+          if (m.loginId) existingLoginIds.add(m.loginId);
+        });
+
+        uploadData.forEach((row, index) => {
+          const rowIndex = index + 2; // 헤더 제외하고 실제 행 번호
+          const [name, loginId, password, deptName, teamName, groupName, position, roleText] = row;
+
+          // 필수 항목 체크
+          if (!name || !loginId || !deptName || !teamName || !groupName) {
+            errors.push(`행 ${rowIndex}: 필수 항목(이름, ID, 실, 팀, 그룹)이 누락되었습니다.`);
+            skippedCount++;
+            return;
+          }
+
+          // ID 중복 체크
+          if (existingLoginIds.has(loginId)) {
+            errors.push(`행 ${rowIndex}: ID "${loginId}"가 이미 존재합니다.`);
+            skippedCount++;
+            return;
+          }
+
+          // 조직 구조 찾기
+          const dept = newOrg.departments.find((d: any) => d.name === deptName);
+          if (!dept) {
+            errors.push(`행 ${rowIndex}: 실 "${deptName}"을 찾을 수 없습니다.`);
+            skippedCount++;
+            return;
+          }
+
+          const team = dept.teams.find((t: any) => t.name === teamName);
+          if (!team) {
+            errors.push(`행 ${rowIndex}: 팀 "${teamName}"을 찾을 수 없습니다.`);
+            skippedCount++;
+            return;
+          }
+
+          const group = team.groups.find((g: any) => g.name === groupName);
+          if (!group) {
+            errors.push(`행 ${rowIndex}: 그룹 "${groupName}"을 찾을 수 없습니다.`);
+            skippedCount++;
+            return;
+          }
+
+          // 권한 텍스트를 role로 변환
+          let role: UserRole = 'member';
+          if (roleText === '관리자') role = 'admin';
+          else if (roleText === '팀장') role = 'team_leader';
+          else if (roleText === '그룹장') role = 'group_leader';
+          else if (roleText === '팀원') role = 'member';
+
+          // 사용자 추가
+          const newMemberId = `emp_${Date.now()}_${index}`;
+          group.members.push({
+            id: newMemberId,
+            name: name,
+            loginId: loginId,
+            password: password || '123',
+            position: position || '선임연구원',
+            role: role
+          });
+
+          existingLoginIds.add(loginId);
+          addedCount++;
+        });
+
+        if (errors.length > 0) {
+          setUploadErrors(errors);
+          setIsErrorModalOpen(true);
+        }
+
+        if (addedCount > 0) {
+          onUpdateOrg(newOrg);
+          alert(`${addedCount}명의 사용자가 추가되었습니다.${skippedCount > 0 ? ` (${skippedCount}건 건너뜀)` : ''}`);
+        } else if (skippedCount > 0) {
+          alert(`추가된 사용자가 없습니다. (${skippedCount}건 건너뜀)`);
+        }
+
+        if (fileInputRef.current) fileInputRef.current.value = '';
+      } catch (error) {
+        console.error('Excel upload error:', error);
+        alert('엑셀 파일을 읽는 중 오류가 발생했습니다.');
+        if (fileInputRef.current) fileInputRef.current.value = '';
+      }
+    };
+  };
+
   return (
     <div>
       <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', borderBottom: '1px solid #eee', paddingBottom: '0.5rem'}}>
-        <h3 className="panel-title" style={{marginBottom: 0, borderBottom: 'none', paddingBottom: 0}}>사용자 및 권한 관리</h3>
-        <button className="btn btn-primary btn-sm" onClick={() => setAddModalOpen(true)}>+ 인원 추가</button>
+        <div>
+          <h3 className="panel-title" style={{marginBottom: 0, borderBottom: 'none', paddingBottom: 0}}>사용자 및 권한 관리</h3>
+        </div>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          <button className="btn btn-secondary btn-sm" onClick={handleDownloadTemplate}>📥 내보내기</button>
+          <label className="btn btn-secondary btn-sm" style={{ cursor: 'pointer', margin: 0 }}>
+            📤 엑셀 업로드
+            <input
+              type="file"
+              ref={fileInputRef}
+              accept=".xlsx,.xls"
+              onChange={handleExcelUpload}
+              style={{ display: 'none' }}
+            />
+          </label>
+          <span style={{ width: '1px', height: '20px', background: '#ccc', margin: '0 4px' }}></span>
+          <button className="btn btn-primary btn-sm" onClick={() => setAddModalOpen(true)}>+ 인원 추가</button>
+        </div>
       </div>
       <table className="user-mgmt-table">
         <thead>
@@ -1034,6 +1241,12 @@ const UserManagementTab = ({ organization, onUpdateOrg }: { organization: Organi
             </div>
         </div>
       )}
+      <ErrorModal
+        isOpen={isErrorModalOpen}
+        title="엑셀 업로드 오류"
+        errors={uploadErrors}
+        onClose={() => setIsErrorModalOpen(false)}
+      />
     </div>
   );
 };
@@ -1138,7 +1351,6 @@ const TreeNode = ({
         <ul className="tree-children">
           {node.children.map((child, idx) => (
             <TreeNode 
-              key={child.id} 
               node={child} 
               onChange={onChange}
               onAdd={onAdd}
@@ -1173,6 +1385,31 @@ const SimpleConfirmModal = ({ isOpen, title, message, onConfirm, onCancel }: any
     </div>
   );
 };
+
+// [에러 메시지 표시 모달]
+const ErrorModal = ({ isOpen, title, errors, onClose }: { isOpen: boolean; title: string; errors: string[]; onClose: () => void }) => {
+  if (!isOpen || errors.length === 0) return null;
+  return (
+    <div className="modal show" onClick={(e) => e.target === e.currentTarget && onClose()} style={{zIndex: 10000}}>
+      <div className="modal-content" style={{maxWidth: '600px'}}>
+        <h3 className="modal-header" style={{color: '#dc3545'}}>{title}</h3>
+        <div className="modal-body">
+          <div style={{backgroundColor: '#f8d7da', border: '1px solid #f5c6cb', borderRadius: '4px', padding: '12px', marginBottom: '10px'}}>
+            <p style={{margin: 0, color: '#721c24', fontWeight: 'bold', marginBottom: '8px'}}>다음 오류가 발생했습니다:</p>
+            <ul style={{margin: 0, paddingLeft: '20px', color: '#721c24'}}>
+              {errors.map((error, idx) => (
+                <li key={idx} style={{marginBottom: '4px'}}>{error}</li>
+              ))}
+            </ul>
+          </div>
+        </div>
+        <div className="modal-footer">
+          <button className="btn btn-primary" onClick={onClose}>확인</button>
+        </div>
+      </div>
+    </div>
+  );
+};
 //2601071028 
 // ... (이전 import 및 타입 정의, CategoryManagementTab 등 기존 코드는 그대로 유지)
 // ... imports (React, useState, useEffect, useCallback, useMemo 등 필요)
@@ -1192,8 +1429,11 @@ const SimpleConfirmModal = ({ isOpen, title, message, onConfirm, onCancel }: any
 interface FlatTableRow {
     id: number;
     lv1: string;
-    lv2: string; 
+    lv1Code?: string;
+    lv2: string;
+    lv2Code?: string;
     lv3: string; // 이제 업무 구분이 들어갑니다 (Select 선택값)
+    lv3Code?: string;
 }
 
 const OBSManagementTab = ({ 
@@ -1207,6 +1447,40 @@ const OBSManagementTab = ({
   }) => {
   const FIXED_LV1_OPTIONS = ["1. 중점과제", "2. 지시과제", "3. 자체과제", "4. 기타"];
   const [rows, setRows] = useState<FlatTableRow[]>([]);
+  const [uploadErrors, setUploadErrors] = useState<string[]>([]);
+  const [isErrorModalOpen, setIsErrorModalOpen] = useState(false);
+
+  // OBS 코드 생성 헬퍼 함수
+  const generateOBSCode = useCallback((lv1: string, lv2: string, lv3: string, existingRows: FlatTableRow[] = []): { lv1Code: string, lv2Code: string, lv3Code: string } => {
+    // Lv.1 코드
+    const lv1Code = obsCodeMapping.lv1[lv1 as keyof typeof obsCodeMapping.lv1] || '';
+    
+    // Lv.2 코드 (팀 이름에서 팀 코드 매핑)
+    const lv2Code = lv2 ? ((orgCodeMapping.teams as any)[lv2] || '') : '';
+    
+    // Lv.3 코드 (업무 구분 Lv.3에서 찾기 - categoryMaster에서 찾아야 함)
+    let lv3Code = '';
+    if (lv3) {
+      const categoryMaster = organization.departments[0]?.teams[0]?.categoryMaster || categoryMasterData;
+      outerLoop:
+      for (const cat1Key of Object.keys(categoryMaster)) {
+        const cat2Obj = categoryMaster[cat1Key];
+        for (const cat2Key of Object.keys(cat2Obj)) {
+          const cat3Array = cat2Obj[cat2Key];
+          if (Array.isArray(cat3Array) && cat3Array.includes(lv3)) {
+            // 업무 구분에서 Lv.3 코드 찾기 (CategoryManagementTab의 코드 생성 로직 참고)
+            const cat1Code = (categoryCodeMapping.category1 as any)[cat1Key.split(' (')[0]] || '';
+            const cat2Index = Object.keys(cat2Obj).indexOf(cat2Key) + 1;
+            const cat3Index = cat3Array.indexOf(lv3) + 1;
+            lv3Code = `${cat1Code}.${String(cat2Index).padStart(2, '0')}.${String(cat3Index).padStart(2, '0')}`;
+            break outerLoop;
+          }
+        }
+      }
+    }
+    
+    return { lv1Code, lv2Code, lv3Code };
+  }, [organization]);
 
   // 1. 조직도에서 팀 목록 추출
   const teamOptions = useMemo(() => {
@@ -1219,26 +1493,24 @@ const OBSManagementTab = ({
       return [...new Set(teams)].sort();
   }, [organization]);
 
-  // [신규] 업무 구분(Work Classification)의 Lv.2 목록 추출
+  // [신규] 업무 구분(Work Classification)의 Lv.3 소분류 목록 추출 (OBS Lv.3는 업무 구분 Lv.3만 참조)
   const workOptions = useMemo(() => {
       const options = new Set<string>();
       
-      // 전역 상수 categoryMasterData (기본 데이터)에서 추출
-      Object.values(categoryMasterData).forEach(lv2Obj => {
-          Object.keys(lv2Obj).forEach(key => options.add(key));
-      });
-
-      // 현재 상태(initialData)가 업무 구분 데이터라면 거기서도 추출 (OBS 데이터가 아닐 경우)
-      // (OBS 데이터는 '1. 중점과제' 같은 키를 가짐)
-      const isOBSData = Object.keys(initialData).some(k => k.includes("1. 중점과제"));
-      if (!isOBSData) {
-          Object.values(initialData).forEach(lv2Obj => {
-              Object.keys(lv2Obj).forEach(key => options.add(key));
+      // 업무 구분 데이터 가져오기 (organization의 첫 번째 팀의 categoryMaster 사용)
+      const categoryMaster = organization.departments[0]?.teams[0]?.categoryMaster || categoryMasterData;
+      
+      // 모든 Lv.1의 모든 Lv.2의 모든 Lv.3 소분류 추출
+      Object.values(categoryMaster).forEach(lv2Obj => {
+          Object.values(lv2Obj).forEach(lv3Array => {
+              if (Array.isArray(lv3Array)) {
+                  lv3Array.forEach(lv3Item => options.add(lv3Item));
+              }
           });
-      }
+      });
       
       return [...options].sort();
-  }, [initialData]);
+  }, [organization]);
 
   // 2. 초기 데이터 평탄화
   useEffect(() => {
@@ -1247,7 +1519,8 @@ const OBSManagementTab = ({
 
       if (Object.keys(initialData).length === 0) {
           FIXED_LV1_OPTIONS.forEach(lv1 => {
-              flatRows.push({ id: idCounter++, lv1: lv1, lv2: '', lv3: '' });
+              const codes = generateOBSCode(lv1, '', '');
+              flatRows.push({ id: idCounter++, lv1: lv1, lv1Code: codes.lv1Code, lv2: '', lv2Code: '', lv3: '', lv3Code: '' });
           });
       } else {
           const processedLv1 = new Set<string>();
@@ -1256,15 +1529,18 @@ const OBSManagementTab = ({
               processedLv1.add(lv1Key);
               const lv2Obj = initialData[lv1Key];
               if (!lv2Obj || Object.keys(lv2Obj).length === 0) {
-                  flatRows.push({ id: idCounter++, lv1: lv1Key, lv2: '', lv3: '' });
+                  const codes = generateOBSCode(lv1Key, '', '');
+                  flatRows.push({ id: idCounter++, lv1: lv1Key, lv1Code: codes.lv1Code, lv2: '', lv2Code: '', lv3: '', lv3Code: '' });
               } else {
                   Object.keys(lv2Obj).forEach(lv2Key => {
                       const lv3Array = lv2Obj[lv2Key];
                       if (lv3Array.length === 0) {
-                          flatRows.push({ id: idCounter++, lv1: lv1Key, lv2: lv2Key, lv3: '' });
+                          const codes = generateOBSCode(lv1Key, lv2Key, '');
+                          flatRows.push({ id: idCounter++, lv1: lv1Key, lv1Code: codes.lv1Code, lv2: lv2Key, lv2Code: codes.lv2Code, lv3: '', lv3Code: '' });
                       } else {
                           lv3Array.forEach(lv3Item => {
-                              flatRows.push({ id: idCounter++, lv1: lv1Key, lv2: lv2Key, lv3: lv3Item });
+                              const codes = generateOBSCode(lv1Key, lv2Key, lv3Item);
+                              flatRows.push({ id: idCounter++, lv1: lv1Key, lv1Code: codes.lv1Code, lv2: lv2Key, lv2Code: codes.lv2Code, lv3: lv3Item, lv3Code: codes.lv3Code });
                           });
                       }
                   });
@@ -1275,25 +1551,43 @@ const OBSManagementTab = ({
           Object.keys(initialData).forEach(lv1Key => {
               if (processedLv1.has(lv1Key)) return;
                const lv2Obj = initialData[lv1Key];
-               if (Object.keys(lv2Obj).length === 0) { flatRows.push({ id: idCounter++, lv1: lv1Key, lv2: '', lv3: '' }); }
+               if (Object.keys(lv2Obj).length === 0) { 
+                 const codes = generateOBSCode(lv1Key, '', '');
+                 flatRows.push({ id: idCounter++, lv1: lv1Key, lv1Code: codes.lv1Code, lv2: '', lv2Code: '', lv3: '', lv3Code: '' }); 
+               }
                else {
                    Object.keys(lv2Obj).forEach(lv2Key => {
                        const lv3Array = lv2Obj[lv2Key];
-                       if (lv3Array.length === 0) { flatRows.push({ id: idCounter++, lv1: lv1Key, lv2: lv2Key, lv3: '' }); }
-                       else { lv3Array.forEach(lv3Item => flatRows.push({ id: idCounter++, lv1: lv1Key, lv2: lv2Key, lv3: lv3Item })); }
+                       if (lv3Array.length === 0) { 
+                         const codes = generateOBSCode(lv1Key, lv2Key, '');
+                         flatRows.push({ id: idCounter++, lv1: lv1Key, lv1Code: codes.lv1Code, lv2: lv2Key, lv2Code: codes.lv2Code, lv3: '', lv3Code: '' }); 
+                       }
+                       else { 
+                         lv3Array.forEach(lv3Item => {
+                           const codes = generateOBSCode(lv1Key, lv2Key, lv3Item);
+                           flatRows.push({ id: idCounter++, lv1: lv1Key, lv1Code: codes.lv1Code, lv2: lv2Key, lv2Code: codes.lv2Code, lv3: lv3Item, lv3Code: codes.lv3Code });
+                         });
+                       }
                    });
                }
           });
       }
       setRows(flatRows);
-  }, [initialData]);
+  }, [initialData, generateOBSCode]);
 
   const handleAddRow = () => {
+      const newLv1 = FIXED_LV1_OPTIONS[0];
+      const newLv2 = teamOptions.length > 0 ? teamOptions[0] : '';
+      const newLv3 = workOptions.length > 0 ? workOptions[0] : '';
+      const codes = generateOBSCode(newLv1, newLv2, newLv3);
       setRows([...rows, {
           id: Date.now(),
-          lv1: FIXED_LV1_OPTIONS[0],
-          lv2: teamOptions.length > 0 ? teamOptions[0] : '', 
-          lv3: workOptions.length > 0 ? workOptions[0] : '' // [변경] 첫 번째 업무 기본 선택
+          lv1: newLv1,
+          lv1Code: codes.lv1Code,
+          lv2: newLv2, 
+          lv2Code: codes.lv2Code,
+          lv3: newLv3,
+          lv3Code: codes.lv3Code
       }]);
   };
 
@@ -1302,7 +1596,21 @@ const OBSManagementTab = ({
   };
 
   const handleInputChange = (id: number, field: keyof FlatTableRow, value: string) => {
-      setRows(rows.map(row => row.id === id ? { ...row, [field]: value } : row));
+      setRows(rows.map(row => {
+          if (row.id !== id) return row;
+          
+          const updated = { ...row, [field]: value };
+          
+          // Lv.1, Lv.2, Lv.3 변경 시 코드 자동 업데이트
+          if (field === 'lv1' || field === 'lv2' || field === 'lv3') {
+              const codes = generateOBSCode(updated.lv1, updated.lv2, updated.lv3);
+              updated.lv1Code = codes.lv1Code;
+              updated.lv2Code = codes.lv2Code;
+              updated.lv3Code = codes.lv3Code;
+          }
+          
+          return updated;
+      }));
   };
 
   const handleSaveClick = () => {
@@ -1320,6 +1628,139 @@ const OBSManagementTab = ({
       onSave(newMaster);
   };
 
+  // 템플릿 다운로드 (마스터 데이터 포함)
+  const handleDownloadTemplate = () => {
+    const wsData = [
+      ['Lv.1 분류 (과제 유형)', 'Lv.2 분류 (팀 선택)', 'Lv.3 분류 (업무 구분 선택)']
+    ];
+    
+    // 현재 마스터 데이터 추가 (빈 행 제외)
+    rows.forEach(row => {
+      if (row.lv1 || row.lv2 || row.lv3) {
+        wsData.push([
+          row.lv1 || '',
+          row.lv2 || '',
+          row.lv3 || ''
+        ]);
+      }
+    });
+    
+    // 데이터가 없으면 예시 데이터 추가
+    if (rows.length === 0 || rows.every(r => !r.lv1 && !r.lv2 && !r.lv3)) {
+      wsData.push(['1. 중점과제', '팀명 예시', '업무 구분 예시']);
+    }
+    
+    const ws = XLSX.utils.aoa_to_sheet(wsData);
+    ws['!cols'] = [{ wch: 25 }, { wch: 30 }, { wch: 35 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "OBS_List");
+    XLSX.writeFile(wb, `OBS_Master_Data.xlsx`);
+  };
+
+  // 엑셀 업로드
+  const handleExcelUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.readAsArrayBuffer(file);
+
+    reader.onload = (event) => {
+      try {
+        const data = event.target?.result;
+        if (!data) return;
+
+        const workbook = XLSX.read(data, { type: 'array' });
+        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+        const jsonData = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false }) as any[][];
+
+        if (!jsonData || jsonData.length < 2) {
+          alert('엑셀 파일에 데이터가 없습니다.');
+          return;
+        }
+
+        // 헤더 제외하고 데이터 파싱
+        const newRows: FlatTableRow[] = [];
+        const errors: string[] = [];
+        let idCounter = Math.max(...rows.map(r => r.id), 0) + 1;
+        let rowIndex = 2; // 헤더 제외하고 시작 (엑셀 행 번호는 2부터)
+
+        jsonData.slice(1).forEach((row: any[]) => {
+          // 템플릿 형식: [Lv.1 코드, Lv.1 분류, Lv.2 코드, Lv.2 분류, Lv.3 코드, Lv.3 분류]
+          // 기존 형식도 지원: [Lv.1 분류, Lv.2 분류, Lv.3 분류] (하위 호환성)
+          let lv1Code = '', lv1 = '', lv2Code = '', lv2 = '', lv3Code = '', lv3 = '';
+          
+          if (row.length >= 6) {
+            // 새 형식 (code 포함)
+            lv1Code = row[0]?.toString().trim() || '';
+            lv1 = row[1]?.toString().trim() || '';
+            lv2Code = row[2]?.toString().trim() || '';
+            lv2 = row[3]?.toString().trim() || '';
+            lv3Code = row[4]?.toString().trim() || '';
+            lv3 = row[5]?.toString().trim() || '';
+          } else {
+            // 기존 형식 (하위 호환성)
+            lv1 = row[0]?.toString().trim() || '';
+            lv2 = row[1]?.toString().trim() || '';
+            lv3 = row[2]?.toString().trim() || '';
+          }
+
+          // Lv.1이 유효한 옵션인지 확인
+          if (lv1 && FIXED_LV1_OPTIONS.includes(lv1)) {
+            // 코드가 없으면 자동 생성
+            const codes = generateOBSCode(lv1, lv2, lv3);
+            newRows.push({
+              id: idCounter++,
+              lv1: lv1,
+              lv1Code: lv1Code || codes.lv1Code,
+              lv2: lv2,
+              lv2Code: lv2Code || codes.lv2Code,
+              lv3: lv3,
+              lv3Code: lv3Code || codes.lv3Code
+            });
+          } else if (lv1) {
+            errors.push(`행 ${rowIndex}: Lv.1 "${lv1}"는 유효한 옵션이 아닙니다. (${FIXED_LV1_OPTIONS.join(', ')} 중 선택)`);
+          }
+          rowIndex++;
+        });
+
+        // 에러가 있으면 에러 모달 표시
+        if (errors.length > 0) {
+          setUploadErrors(errors);
+          setIsErrorModalOpen(true);
+        }
+
+        if (newRows.length > 0) {
+          setRows([...rows, ...newRows]);
+          const successMsg = `${newRows.length}개의 데이터가 추가되었습니다.`;
+          if (errors.length > 0) {
+            alert(successMsg + '\n\n일부 데이터에서 오류가 발생했습니다. 에러 상세 내용을 확인해주세요.');
+          } else {
+            alert(successMsg);
+          }
+        } else {
+          if (errors.length > 0) {
+            alert('데이터가 추가되지 않았습니다. 에러 상세 내용을 확인해주세요.');
+          } else {
+            alert('추가할 유효한 데이터가 없습니다.');
+          }
+        }
+      } catch (error: any) {
+        setUploadErrors([`엑셀 파일 읽기 오류: ${error.message}`]);
+        setIsErrorModalOpen(true);
+      }
+    };
+
+    reader.onerror = () => {
+      alert('파일 읽기 오류가 발생했습니다.');
+    };
+
+    // 파일 입력 초기화
+    if (e.target) {
+      e.target.value = '';
+    }
+  };
+
   return (
     <div className="obs-container">
       <div className="obs-header-section">
@@ -1331,32 +1772,62 @@ const OBSManagementTab = ({
       </div>
 
       <div className="obs-toolbar">
-        <button className="btn btn-primary btn-sm" onClick={handleAddRow}>+ 행 추가</button>
-        <button className="btn btn-success btn-sm" onClick={handleSaveClick}>💾 저장</button>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          <button className="btn btn-secondary btn-sm" onClick={handleDownloadTemplate}>📥 내보내기</button>
+          <label className="btn btn-secondary btn-sm" style={{ cursor: 'pointer', margin: 0 }}>
+            📤 엑셀 업로드
+            <input
+              type="file"
+              accept=".xlsx,.xls"
+              onChange={handleExcelUpload}
+              style={{ display: 'none' }}
+            />
+          </label>
+        </div>
+        <div style={{ display: 'flex', gap: '8px' }}>
+          <button className="btn btn-primary btn-sm" onClick={handleAddRow}>+ 행 추가</button>
+          <button className="btn btn-success btn-sm" onClick={handleSaveClick}>💾 저장</button>
+        </div>
       </div>
 
       <div className="obs-table-wrapper">
         <table className="obs-table">
           <colgroup>
-            <col style={{width: '25%'}} />
-            <col style={{width: '30%'}} />
-            <col style={{width: '35%'}} />
+            <col style={{width: '8%'}} />
+            <col style={{width: '17%'}} />
+            <col style={{width: '8%'}} />
+            <col style={{width: '22%'}} />
+            <col style={{width: '8%'}} />
+            <col style={{width: '27%'}} />
             <col style={{width: '10%'}} />
           </colgroup>
           <thead>
             <tr>
+              <th>Lv.1 코드</th>
               <th>Lv.1 분류 (과제 유형)</th>
+              <th>Lv.2 코드</th>
               <th>Lv.2 분류 (팀 선택)</th>
+              <th>Lv.3 코드</th>
               <th>Lv.3 분류 (업무 구분 선택)</th>
               <th style={{textAlign: 'center'}}>관리</th>
             </tr>
           </thead>
           <tbody>
             {rows.length === 0 ? (
-                 <tr><td colSpan={4} className="obs-empty-state">데이터가 없습니다. '행 추가' 버튼을 눌러 등록하세요.</td></tr>
+                 <tr><td colSpan={7} className="obs-empty-state">데이터가 없습니다. '행 추가' 버튼을 눌러 등록하세요.</td></tr>
             ) : (
                 rows.map((row) => (
                     <tr key={row.id}>
+                      {/* Lv.1 Code */}
+                      <td>
+                        <input 
+                          type="text"
+                          className="obs-select obs-grid-input"
+                          value={row.lv1Code || ''}
+                          onChange={(e) => handleInputChange(row.id, 'lv1Code', e.target.value)}
+                          style={{ textAlign: 'center', fontSize: '0.9em' }}
+                        />
+                      </td>
                       {/* Lv.1 Dropdown */}
                       <td>
                         <select 
@@ -1369,6 +1840,16 @@ const OBSManagementTab = ({
                             ))}
                         </select>
                       </td>
+                      {/* Lv.2 Code */}
+                      <td>
+                        <input 
+                          type="text"
+                          className="obs-select obs-grid-input"
+                          value={row.lv2Code || ''}
+                          onChange={(e) => handleInputChange(row.id, 'lv2Code', e.target.value)}
+                          style={{ textAlign: 'center', fontSize: '0.9em' }}
+                        />
+                      </td>
                       {/* Lv.2 Select (팀 선택) */}
                       <td>
                           <select 
@@ -1376,15 +1857,31 @@ const OBSManagementTab = ({
                             value={row.lv2}
                             onChange={(e) => handleInputChange(row.id, 'lv2', e.target.value)}
                             style={{ 
-                                color: row.lv2 ? '#495057' : '#999', 
-                                borderColor: !row.lv2 ? '#ffc107' : '#ced4da'
+                                color: row.lv2 ? '#495057' : '#6c757d', 
+                                borderColor: !row.lv2 ? '#ffc107' : '#ced4da',
+                                backgroundColor: row.lv2 ? '#fff' : '#fffacd',
+                                fontWeight: row.lv2 ? 'normal' : '500'
                             }}
                           >
-                            <option value="" disabled>(팀 선택)</option>
-                            {teamOptions.map(teamName => (
-                                <option key={teamName} value={teamName}>{teamName}</option>
-                            ))}
+                            <option value="">(팀 선택)</option>
+                            {teamOptions.length > 0 ? (
+                                teamOptions.map(teamName => (
+                                    <option key={teamName} value={teamName}>{teamName}</option>
+                                ))
+                            ) : (
+                                <option value="" disabled>팀이 없습니다</option>
+                            )}
                           </select>
+                      </td>
+                      {/* Lv.3 Code */}
+                      <td>
+                        <input 
+                          type="text"
+                          className="obs-select obs-grid-input"
+                          value={row.lv3Code || ''}
+                          onChange={(e) => handleInputChange(row.id, 'lv3Code', e.target.value)}
+                          style={{ textAlign: 'center', fontSize: '0.9em' }}
+                        />
                       </td>
                       {/* [변경] Lv.3 Select (업무 구분 선택) */}
                       <td>
@@ -1420,6 +1917,12 @@ const OBSManagementTab = ({
           </tbody>
         </table>
       </div>
+      <ErrorModal
+        isOpen={isErrorModalOpen}
+        title="엑셀 업로드 오류"
+        errors={uploadErrors}
+        onClose={() => setIsErrorModalOpen(false)}
+      />
     </div>
   );
 };
@@ -1436,13 +1939,15 @@ const OBSManagementTab = ({
 const CategoryManagementTab = ({ 
   initialData, 
   initialCodes,
-  onSave 
+  onSave
 }: { 
   initialData: CategoryMaster, 
   initialCodes: any,
-  onSave: (newMaster: CategoryMaster) => void 
+  onSave: (newMaster: CategoryMaster) => void
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [uploadErrors, setUploadErrors] = useState<string[]>([]);
+  const [isErrorModalOpen, setIsErrorModalOpen] = useState(false);
   
   // 상태 관리 (Lv.3 포함하여 초기화)
   const [tree, setTree] = useState<CatNode[]>(() => {
@@ -1492,7 +1997,7 @@ const CategoryManagementTab = ({
   };
 
   // 다음 코드 자동 생성
-  const getNextCode = (siblings: CatNode[], level: number): string => {
+  const getNextCode = (siblings: CatNode[], level: 1 | 2 | 3): string => {
     if (siblings.length === 0) return level === 1 ? 'A01' : '01';
     const lastCode = siblings[siblings.length - 1].code;
     const match = lastCode.match(/(\d+)$/);
@@ -1583,20 +2088,311 @@ const CategoryManagementTab = ({
   };
 
   const handleDownloadTemplate = () => {
-     if (typeof XLSX === 'undefined') { alert('엑셀 라이브러리 오류'); return; }
      const wsData = [['Lv1 코드', 'Lv1 명칭', 'Lv2 코드', 'Lv2 명칭', 'Lv3 코드', 'Lv3 명칭']];
-     // 템플릿용 데이터 생성
+     
+     // 현재 마스터 데이터를 평탄화하여 엑셀 데이터로 변환
+     tree.forEach(node1 => {
+       if (!node1.name) return;
+       
+       node1.children.forEach(node2 => {
+         if (!node2.name) return;
+         
+         // Lv.3가 있는 경우 각각 행으로 추가
+         if (node2.children.length > 0) {
+           node2.children.forEach(node3 => {
+             if (node3.name) {
+               wsData.push([
+                 node1.code,
+                 node1.name,
+                 node2.code,
+                 node2.name,
+                 node3.code,
+                 node3.name
+               ]);
+             }
+           });
+         } else {
+           // Lv.3가 없는 경우 Lv.2만 추가
+           wsData.push([
+             node1.code,
+             node1.name,
+             node2.code,
+             node2.name,
+             '',
+             ''
+           ]);
+         }
+       });
+     });
+     
      const ws = XLSX.utils.aoa_to_sheet(wsData);
      ws['!cols'] = [{ wch: 10 }, { wch: 20 }, { wch: 10 }, { wch: 20 }, { wch: 10 }, { wch: 20 }];
      const wb = XLSX.utils.book_new();
      XLSX.utils.book_append_sheet(wb, ws, "Category_List");
-     XLSX.writeFile(wb, `Category_Template.xlsx`);
+     XLSX.writeFile(wb, `Category_Master_Data.xlsx`);
   };
 
   const handleExcelUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    alert("현재 버전에서는 Lv.3까지 포함된 엑셀 업로드 로직이 복잡하여 수동 입력을 권장합니다.");
-    // (필요 시 Lv.3 파싱 로직 추가 가능)
-    if (fileInputRef.current) fileInputRef.current.value = '';
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.readAsArrayBuffer(file);
+
+    reader.onload = (event) => {
+      try {
+        const data = event.target?.result;
+        if (!data) return;
+
+        const workbook = XLSX.read(data, { type: 'array' });
+        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+        const jsonData = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false }) as any[][];
+
+        if (!jsonData || jsonData.length < 2) {
+          alert('엑셀 파일에 데이터가 없습니다.');
+          if (fileInputRef.current) fileInputRef.current.value = '';
+          return;
+        }
+
+        // 헤더 제외하고 데이터 파싱
+        const uploadData = jsonData.slice(1);
+        const newTreeData: CatNode[] = JSON.parse(JSON.stringify(tree)); // 깊은 복사
+        
+        // 기존 데이터를 맵으로 변환하여 중복 체크용 (명칭 및 코드)
+        const existingNameMap = new Map<string, boolean>();
+        const existingCodeMap = new Map<string, string>(); // 코드 -> 명칭 매핑
+        const errors: string[] = [];
+        
+        const addToMap = (nodes: CatNode[]) => {
+          nodes.forEach(node1 => {
+            if (node1.name) {
+              existingNameMap.set(`L1_${node1.code}_${node1.name}`, true);
+              existingCodeMap.set(`L1_${node1.code}`, node1.name);
+              node1.children.forEach(node2 => {
+                if (node2.name) {
+                  existingNameMap.set(`L2_${node1.code}_${node2.code}_${node2.name}`, true);
+                  existingCodeMap.set(`L2_${node1.code}_${node2.code}`, node2.name);
+                  node2.children.forEach(node3 => {
+                    if (node3.name) {
+                      existingNameMap.set(`L3_${node1.code}_${node2.code}_${node3.code}_${node3.name}`, true);
+                      existingCodeMap.set(`L3_${node1.code}_${node2.code}_${node3.code}`, node3.name);
+                    }
+                  });
+                }
+              });
+            }
+          });
+        };
+        addToMap(newTreeData);
+
+        let addedCount = 0;
+        let skippedCount = 0;
+        let rowIndex = 2; // 헤더 제외하고 시작 (엑셀 행 번호는 2부터)
+
+        // 엑셀 데이터를 순회하며 추가
+        uploadData.forEach((row: any[]) => {
+          const lv1Code = row[0]?.toString().trim() || '';
+          const lv1Name = row[1]?.toString().trim() || '';
+          const lv2Code = row[2]?.toString().trim() || '';
+          const lv2Name = row[3]?.toString().trim() || '';
+          const lv3Code = row[4]?.toString().trim() || '';
+          const lv3Name = row[5]?.toString().trim() || '';
+
+          if (!lv1Name) {
+            rowIndex++;
+            return; // Lv.1 명칭이 없으면 스킵
+          }
+
+          // Lv.1 코드 중복 체크
+          if (lv1Code) {
+            const existingLv1Code = existingCodeMap.get(`L1_${lv1Code}`);
+            if (existingLv1Code && existingLv1Code !== lv1Name) {
+              errors.push(`행 ${rowIndex}: Lv.1 코드 "${lv1Code}"가 이미 다른 명칭("${existingLv1Code}")으로 사용 중입니다.`);
+              rowIndex++;
+              skippedCount++;
+              return;
+            }
+          }
+
+          // Lv.1 찾기 또는 생성
+          let lv1Node = newTreeData.find(n => n.code === lv1Code && n.name === lv1Name);
+          if (!lv1Node) {
+            // 코드만 일치하는 경우 체크
+            const codeOnlyMatch = newTreeData.find(n => n.code === lv1Code);
+            if (codeOnlyMatch) {
+              errors.push(`행 ${rowIndex}: Lv.1 코드 "${lv1Code}"가 이미 다른 명칭("${codeOnlyMatch.name}")으로 사용 중입니다.`);
+              rowIndex++;
+              skippedCount++;
+              return;
+            }
+            
+            // 새로운 Lv.1 생성
+            const newCode = lv1Code || getNextCode(newTreeData, 1);
+            // 새 코드도 중복 체크
+            if (existingCodeMap.has(`L1_${newCode}`)) {
+              errors.push(`행 ${rowIndex}: Lv.1 코드 "${newCode}"가 이미 사용 중입니다.`);
+              rowIndex++;
+              skippedCount++;
+              return;
+            }
+            
+            lv1Node = {
+              id: `new_l1_${Date.now()}_${Math.random()}`,
+              level: 1 as const,
+              code: newCode,
+              name: lv1Name,
+              children: []
+            };
+            newTreeData.push(lv1Node);
+            existingCodeMap.set(`L1_${newCode}`, lv1Name);
+            existingNameMap.set(`L1_${newCode}_${lv1Name}`, true);
+            addedCount++;
+          }
+
+          if (!lv2Name) {
+            rowIndex++;
+            return; // Lv.2 명칭이 없으면 스킵
+          }
+
+          // Lv.2 코드 중복 체크
+          if (lv2Code) {
+            const existingLv2Code = existingCodeMap.get(`L2_${lv1Node.code}_${lv2Code}`);
+            if (existingLv2Code && existingLv2Code !== lv2Name) {
+              errors.push(`행 ${rowIndex}: Lv.2 코드 "${lv2Code}"가 이미 다른 명칭("${existingLv2Code}")으로 사용 중입니다.`);
+              rowIndex++;
+              skippedCount++;
+              return;
+            }
+          }
+
+          // Lv.2 찾기 또는 생성
+          let lv2Node = lv1Node.children.find(n => n.code === lv2Code && n.name === lv2Name);
+          if (!lv2Node) {
+            // 코드만 일치하는 경우 체크
+            const codeOnlyMatch = lv1Node.children.find(n => n.code === lv2Code);
+            if (codeOnlyMatch) {
+              errors.push(`행 ${rowIndex}: Lv.2 코드 "${lv2Code}"가 이미 다른 명칭("${codeOnlyMatch.name}")으로 사용 중입니다.`);
+              rowIndex++;
+              skippedCount++;
+              return;
+            }
+            
+            // 새로운 Lv.2 생성
+            const newCode = lv2Code || getNextCode(lv1Node.children, 2);
+            // 새 코드도 중복 체크
+            if (existingCodeMap.has(`L2_${lv1Node.code}_${newCode}`)) {
+              errors.push(`행 ${rowIndex}: Lv.2 코드 "${newCode}"가 이미 사용 중입니다.`);
+              rowIndex++;
+              skippedCount++;
+              return;
+            }
+            
+            lv2Node = {
+              id: `new_l2_${Date.now()}_${Math.random()}`,
+              level: 2 as const,
+              code: newCode,
+              name: lv2Name,
+              children: []
+            };
+            lv1Node.children.push(lv2Node);
+            existingCodeMap.set(`L2_${lv1Node.code}_${newCode}`, lv2Name);
+            existingNameMap.set(`L2_${lv1Node.code}_${newCode}_${lv2Name}`, true);
+            addedCount++;
+          }
+
+          if (lv3Name) {
+            // Lv.3 코드 중복 체크
+            if (lv3Code) {
+              const existingLv3Code = existingCodeMap.get(`L3_${lv1Node.code}_${lv2Node.code}_${lv3Code}`);
+              if (existingLv3Code && existingLv3Code !== lv3Name) {
+                errors.push(`행 ${rowIndex}: Lv.3 코드 "${lv3Code}"가 이미 다른 명칭("${existingLv3Code}")으로 사용 중입니다.`);
+                rowIndex++;
+                skippedCount++;
+                return;
+              }
+            }
+            
+            // Lv.3 중복 체크 (명칭)
+            const lv3Key = `L3_${lv1Node.code}_${lv2Node.code}_${lv3Code}_${lv3Name}`;
+            if (existingNameMap.has(lv3Key)) {
+              rowIndex++;
+              skippedCount++;
+              return;
+            }
+
+            // 코드만 일치하는 경우 체크
+            if (lv3Code) {
+              const codeOnlyMatch = lv2Node.children.find(n => n.code === lv3Code);
+              if (codeOnlyMatch) {
+                errors.push(`행 ${rowIndex}: Lv.3 코드 "${lv3Code}"가 이미 다른 명칭("${codeOnlyMatch.name}")으로 사용 중입니다.`);
+                rowIndex++;
+                skippedCount++;
+                return;
+              }
+            }
+
+            // 새로운 Lv.3 생성
+            const newCode = lv3Code || getNextCode(lv2Node.children, 3);
+            // 새 코드도 중복 체크
+            if (existingCodeMap.has(`L3_${lv1Node.code}_${lv2Node.code}_${newCode}`)) {
+              errors.push(`행 ${rowIndex}: Lv.3 코드 "${newCode}"가 이미 사용 중입니다.`);
+              rowIndex++;
+              skippedCount++;
+              return;
+            }
+
+            const lv3Node: CatNode = {
+              id: `new_l3_${Date.now()}_${Math.random()}`,
+              level: 3 as const,
+              code: newCode,
+              name: lv3Name,
+              children: []
+            };
+            lv2Node.children.push(lv3Node);
+            existingCodeMap.set(`L3_${lv1Node.code}_${lv2Node.code}_${newCode}`, lv3Name);
+            existingNameMap.set(lv3Key, true);
+            addedCount++;
+          }
+          
+          rowIndex++;
+        });
+
+        // 에러가 있으면 에러 모달 표시
+        if (errors.length > 0) {
+          setUploadErrors(errors);
+          setIsErrorModalOpen(true);
+        }
+
+        if (addedCount > 0) {
+          setTree(newTreeData);
+          const successMsg = `${addedCount}개의 데이터가 추가되었습니다.${skippedCount > 0 ? ` (${skippedCount}개 중복/오류 제외)` : ''}`;
+          if (errors.length > 0) {
+            // 에러가 있어도 일부 데이터는 추가되었을 수 있음
+            alert(successMsg + '\n\n일부 데이터에서 오류가 발생했습니다. 에러 상세 내용을 확인해주세요.');
+          } else {
+            alert(successMsg);
+          }
+        } else {
+          if (errors.length > 0) {
+            alert('데이터가 추가되지 않았습니다. 에러 상세 내용을 확인해주세요.');
+          } else {
+            alert('추가할 새로운 데이터가 없습니다. (모두 기존 데이터와 중복)');
+          }
+        }
+      } catch (error: any) {
+        setUploadErrors([`엑셀 파일 읽기 오류: ${error.message}`]);
+        setIsErrorModalOpen(true);
+      }
+    };
+
+    reader.onerror = () => {
+      alert('파일 읽기 오류가 발생했습니다.');
+    };
+
+    // 파일 입력 초기화
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
   };
 
   return (
@@ -1608,15 +2404,25 @@ const CategoryManagementTab = ({
             대분류(Lv.1), 중분류(Lv.2), 소분류(Lv.3)를 체계적으로 관리합니다.
           </p>
         </div>
-        <div style={{ display: 'flex', gap: '8px' }}>
-          <button className="btn btn-secondary btn-sm" onClick={handleDownloadTemplate}>📥 양식 다운로드</button>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          <button className="btn btn-secondary btn-sm" onClick={handleDownloadTemplate}>📥 내보내기</button>
+          <label className="btn btn-secondary btn-sm" style={{ cursor: 'pointer', margin: 0 }}>
+            📤 엑셀 업로드
+            <input
+              type="file"
+              ref={fileInputRef}
+              accept=".xlsx,.xls"
+              onChange={handleExcelUpload}
+              style={{ display: 'none' }}
+            />
+          </label>
           <span className="toolbar-separator"></span>
           <button className="btn btn-primary btn-sm" onClick={() => handleAdd(null, 1)}>+ 대분류 추가</button>
           <button className="btn btn-success btn-sm" onClick={() => setSaveModalOpen(true)}>💾 저장</button>
         </div>
       </div>
 
-      <div className="table-container" style={{ marginTop: '20px', backgroundColor: 'white', borderRadius: '8px', boxShadow: '0 1px 3px rgba(0,0,0,0.1)', overflow: 'hidden' }}>
+      <div className="table-container" style={{ marginTop: '20px', backgroundColor: 'white', borderRadius: '8px', boxShadow: '0 1px 3px rgba(0,0,0,0.1)', overflowY: 'auto', maxHeight: 'calc(100vh - 300px)', flex: 1 }}>
         <table className="cat-table">
           <thead>
             <tr>
@@ -1631,7 +2437,7 @@ const CategoryManagementTab = ({
           </thead>
           <tbody>
             {tree.length === 0 ? (
-              <tr><td colSpan={7} style={{textAlign:'center', padding:'30px', color:'#999'}}>등록된 분류가 없습니다.</td></tr>
+              <tr><td colSpan={8} style={{textAlign:'center', padding:'30px', color:'#999'}}>등록된 분류가 없습니다.</td></tr>
             ) : (
               tree.map((node1) => {
                 const n1Span = getRowSpan(node1);
@@ -1645,7 +2451,7 @@ const CategoryManagementTab = ({
                          <input className="cat-input" value={node1.name} onChange={(e) => handleChange(node1.id, 'name', e.target.value)} placeholder="대분류 입력" />
                          <button className="text-btn add" onClick={() => handleAdd(node1.id, 2)}>+ 중분류 추가</button>
                        </td>
-                       <td colSpan={4} style={{background:'#f9f9f9', textAlign:'center', color:'#ccc'}}>(중분류 없음)</td>
+                       <td colSpan={5} style={{background:'#f9f9f9', textAlign:'center', color:'#ccc'}}>(중분류 없음)</td>
                        <td>
                           <button className="btn-action delete" onClick={() => handleDeleteRequest(node1.id, 1)} style={{color:'#dc3545'}}>🗑️ 대분류 삭제</button>
                        </td>
@@ -1726,6 +2532,12 @@ const CategoryManagementTab = ({
         onConfirm={executeSave}
         onCancel={() => setSaveModalOpen(false)}
       />
+      <ErrorModal
+        isOpen={isErrorModalOpen}
+        title="엑셀 업로드 오류"
+        errors={uploadErrors}
+        onClose={() => setIsErrorModalOpen(false)}
+      />
     </div>
   );
 };
@@ -1749,13 +2561,22 @@ const AdminPanel = ({
   const [deleteConfirm, setDeleteConfirm] = useState<{ isOpen: boolean; level: string; ids: any } | null>(null);
   const { organization, tasks } = data;
 
-  // 최신 카테고리 마스터 데이터 가져오기
+  // 최신 카테고리 마스터 데이터 가져오기 (업무 구분용)
   const activeCategoryData = useMemo(() => {
     const firstDept = organization.departments[0];
     if (firstDept && firstDept.teams.length > 0) {
       return firstDept.teams[0].categoryMaster;
     }
     return categoryMasterData;
+  }, [organization]);
+
+  // 최신 OBS 마스터 데이터 가져오기 (OBS 관리용)
+  const activeOBSData = useMemo(() => {
+    const firstDept = organization.departments[0];
+    if (firstDept && firstDept.teams.length > 0) {
+      return firstDept.teams[0].obsMaster || {};
+    }
+    return {};
   }, [organization]);
 
   // --- 기존 조직 관리 함수들 ---
@@ -1788,17 +2609,77 @@ const AdminPanel = ({
     } catch (e: any) { console.error(e); addNotification(`삭제 중 오류 발생: ${e.message}`, 'error'); }
   };
 
-  // OBS/카테고리 데이터 저장 핸들러
+  // 업무 구분 데이터 저장 핸들러
   const handleCategorySave = (newMasterData: CategoryMaster) => {
     const newOrganization = JSON.parse(JSON.stringify(organization));
+    const teamMapping = (window as any).categoryTeamMapping || {};
+    
     newOrganization.departments.forEach((dept: Department) => {
         dept.teams.forEach((team: Team) => {
             team.categoryMaster = newMasterData;
+            // 팀 매핑 정보 저장 (Team 타입에 teamMapping 필드가 있다고 가정)
+            (team as any).categoryTeamMapping = teamMapping;
         });
     });
     onUpdateData({ ...data, organization: newOrganization });
-    addNotification("마스터 정보가 저장되었습니다.", "success");
+    addNotification("업무 구분 정보가 저장되었습니다.", "success");
   };
+
+  // OBS 관리 데이터 저장 핸들러 (업무 구분과 분리)
+  const handleOBSSave = (newOBSData: CategoryMaster) => {
+    const newOrganization = JSON.parse(JSON.stringify(organization));
+    
+    newOrganization.departments.forEach((dept: Department) => {
+        dept.teams.forEach((team: Team) => {
+            team.obsMaster = newOBSData;
+        });
+    });
+    onUpdateData({ ...data, organization: newOrganization });
+    addNotification("OBS 관리 정보가 저장되었습니다.", "success");
+  };
+
+  // Task 목록 기반으로 OBS 마스터 자동 생성 및 적용
+  const handleGenerateOBSFromTasks = useCallback(() => {
+    const FIXED_LV1_OPTIONS = ["1. 중점과제", "2. 지시과제", "3. 자체과제", "4. 기타"];
+    const obsMaster: CategoryMaster = {};
+    
+    // 고정 Lv.1 옵션 초기화
+    FIXED_LV1_OPTIONS.forEach(lv1 => {
+      obsMaster[lv1] = {};
+    });
+
+    // Task 목록을 순회하며 팀별, category3별로 OBS 마스터 구성
+    // 기본적으로 "3. 자체과제"에 매핑 (과제유형 정보가 없으므로)
+    const defaultLv1 = "3. 자체과제";
+    
+    tasks.forEach(task => {
+      if (!task.team || !task.category3) return;
+      
+      const teamName = task.team;
+      const category3 = task.category3;
+      
+      // 기본 Lv.1에 팀별로 그룹화
+      if (!obsMaster[defaultLv1][teamName]) {
+        obsMaster[defaultLv1][teamName] = [];
+      }
+      
+      // 중복 제거하며 추가
+      if (!obsMaster[defaultLv1][teamName].includes(category3)) {
+        obsMaster[defaultLv1][teamName].push(category3);
+      }
+    });
+
+    // 모든 팀에 대해 정렬
+    Object.keys(obsMaster).forEach(lv1 => {
+      Object.keys(obsMaster[lv1]).forEach(team => {
+        obsMaster[lv1][team].sort();
+      });
+    });
+
+    // 생성된 OBS 마스터 저장
+    handleOBSSave(obsMaster);
+    addNotification(`Task 목록 기반으로 OBS 마스터가 생성되었습니다. (${tasks.length}개 Task 분석)`, "success");
+  }, [tasks, handleOBSSave, addNotification]);
   //2601071130
 
   //2601071130
@@ -1826,18 +2707,32 @@ const AdminPanel = ({
           <CategoryManagementTab 
             initialData={activeCategoryData} 
             initialCodes={categoryCodeMapping} 
-            onSave={handleCategorySave} 
+            onSave={handleCategorySave}
           />
         )}
  
 
         {/* [NEW] 신규 OBS 관리 탭 */}
         {currentTab === 'obs' && (
-          <OBSManagementTab 
-            initialData={activeCategoryData} 
-            onSave={handleCategorySave}
-            organization={organization}  // [추가] 여기를 꼭 추가해야 합니다!
-          />
+          <div>
+            <div style={{ marginBottom: '10px', padding: '10px', backgroundColor: '#fff', borderRadius: '4px', border: '1px solid #ddd' }}>
+              <button 
+                className="btn btn-info btn-sm" 
+                onClick={handleGenerateOBSFromTasks}
+                style={{ marginRight: '10px' }}
+              >
+                🔄 Task 목록에서 OBS 마스터 자동 생성
+              </button>
+              <span style={{ fontSize: '0.9rem', color: '#666' }}>
+                현재 Task 목록({tasks.length}개)을 분석하여 OBS 마스터를 자동으로 생성합니다.
+              </span>
+            </div>
+            <OBSManagementTab 
+              initialData={activeOBSData} 
+              onSave={handleOBSSave}
+              organization={organization}
+            />
+          </div>
         )}
       </div>
 
@@ -1860,7 +2755,7 @@ const UploadModal = ({ isOpen, onClose, type, onUpload }: { isOpen: boolean; onC
 // [수정] EditModal 컴포넌트 내부
 //2601081207
 // [수정] EditModal: 안전한 데이터 접근 로직 적용
-const EditModal = ({ isOpen, onClose, task, onSave }: { isOpen: boolean; onClose: () => void; task: Task | null; onSave: (task: Task) => void }) => {
+const EditModal = ({ isOpen, onClose, task, onSave, onOpenRevisionModal, onUpdateCategoryMaster, onNotification }: { isOpen: boolean; onClose: () => void; task: Task | null; onSave: (task: Task) => void; onOpenRevisionModal?: (task: Task) => void; onUpdateCategoryMaster?: (category1: string, category2: string, category3: string) => void; onNotification?: (message: string, type: 'success' | 'error') => void }) => {
   const [editedTask, setEditedTask] = useState<Task | null>(null);
   const [revisedStart, setRevisedStart] = useState('');
   const [revisedEnd, setRevisedEnd] = useState('');
@@ -1941,32 +2836,51 @@ const EditModal = ({ isOpen, onClose, task, onSave }: { isOpen: boolean; onClose
   };
 
   const workingDays = calculateWorkingDays(editedTask.planned.startDate || '', editedTask.planned.endDate || '');
-  const dailyHours = workingDays > 0 ? (editedTask.planned.hours / workingDays).toFixed(1) : '0';
+  const dailyHours = workingDays > 0 ? normalizeHHMM(numberToHHMM(hhmmToNumber(editedTask.planned.hours) / workingDays)) : '00.00';
   const getStatusColor = (status: string) => { switch(status) { case 'completed': return '#d4edda'; case 'in-progress': return '#cce5ff'; case 'delayed': return '#fff3cd'; default: return '#e2e3e5'; } };
 
 // ... (EditModal 컴포넌트 내부)
 
   return (
-    <div className="modal show" onClick={(e) => e.target === e.currentTarget && onClose()}>
+    <div className="modal show">
       <div className="modal-content" style={{ maxHeight: '90vh', overflowY: 'auto' }}>
-        <div className="modal-header"><h3>Task 수정</h3></div>
+        <div className="modal-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <h3>Task 수정</h3>
+          {onOpenRevisionModal && task && task.revisions && task.revisions.length > 0 && (
+            <button 
+              onClick={() => onOpenRevisionModal(task)}
+              style={{ 
+                fontSize: '0.9rem', 
+                padding: '6px 12px', 
+                background: '#f8f9fa', 
+                border: '1px solid #dee2e6', 
+                borderRadius: '4px', 
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px'
+              }}
+              title="이력 관리 보기"
+            >
+              📋 이력 관리 ({task.revisions.length})
+            </button>
+          )}
+        </div>
         <div className="modal-body">
           {/* [삭제됨] 담당자 표시 블록 제거 */}
           {/* <div className="form-group"><label className="form-label">담당자</label><input ... /></div> */}
           
           <div className="form-group">
-            <label className="form-label">업무 구분1</label>
+            <label className="form-label">업무 구분 1</label>
             <select className="form-input" value={editedTask.category1} onChange={e => handleChange('category1', e.target.value)}>
               <option value="">선택하세요</option>
               {Object.keys(categoryMasterData).map(cat => (<option key={cat} value={cat}>{cat}</option>))}
             </select>
           </div>
           
-          {/* ... (이하 나머지 코드 유지) ... */}
-          
           <div className="form-row">
             <div className="form-group">
-              <label className="form-label">업무 구분2</label>
+              <label className="form-label">업무 구분 2</label>
               <select className="form-input" value={editedTask.category2} onChange={e => handleChange('category2', e.target.value)} disabled={!editedTask.category1}>
                 <option value="">선택하세요</option>
                 {cat2Options.map(cat => <option key={cat} value={cat}>{cat}</option>)}
@@ -1986,11 +2900,11 @@ const EditModal = ({ isOpen, onClose, task, onSave }: { isOpen: boolean; onClose
             </div>
           </div>
 
-          <div className="form-group"><label className="form-label">Task2</label><input type="text" className="form-input" value={editedTask.name} onChange={e => handleChange('name', e.target.value)} /></div>
+          <div className="form-group"><label className="form-label">Task 2</label><input type="text" className="form-input" value={editedTask.name} onChange={e => handleChange('name', e.target.value)} /></div>
           <div className="form-group"><label className="form-label">Task Code</label><input type="text" className="form-input" value={editedTask.taskCode} disabled style={{ backgroundColor: '#e9ecef' }} /></div>
           
           <div className="form-row"><div className="form-group"><label className="form-label">현재 계획 착수일</label><input type="date" className="form-input" value={editedTask.planned.startDate || ''} disabled style={{ backgroundColor: '#e9ecef', color: '#6c757d' }} /></div><div className="form-group"><label className="form-label">현재 계획 종료일</label><input type="date" className="form-input" value={editedTask.planned.endDate || ''} disabled style={{ backgroundColor: '#e9ecef', color: '#6c757d' }} /></div></div>
-          <div className="form-row"><div className="form-group"><label className="form-label">하루 예상 시수 (h)</label><input type="text" className="form-input" value={dailyHours} disabled style={{ backgroundColor: '#e9ecef' }} /></div><div className="form-group"><label className="form-label">계획 시수 (h)</label><input type="number" className="form-input" value={editedTask.planned.hours} disabled style={{ backgroundColor: '#e9ecef' }} /></div></div>
+          <div className="form-row"><div className="form-group"><label className="form-label">하루 예상 시수</label><input type="text" className="form-input" value={dailyHours} disabled style={{ backgroundColor: '#e9ecef' }} /></div><div className="form-group"><label className="form-label">계획 시수</label><input type="text" className="form-input" value={editedTask.planned.hours} disabled style={{ backgroundColor: '#e9ecef' }} /></div></div>
           
           <div style={{ marginTop: '20px', padding: '15px', backgroundColor: '#f8f9fa', borderRadius: '8px', border: '1px solid #e9ecef' }}>
             <h4 style={{ margin: '0 0 10px 0', fontSize: '0.95rem', color: '#343a40', display: 'flex', alignItems: 'center' }}>📅 계획 일정 변경</h4>
@@ -2012,6 +2926,66 @@ const EditModal = ({ isOpen, onClose, task, onSave }: { isOpen: boolean; onClose
   );
 };
 //2601081207
+
+const RevisionModal = ({ isOpen, onClose, task }: { isOpen: boolean; onClose: () => void; task: Task | null }) => {
+  if (!isOpen || !task) return null;
+
+  return (
+    <div className="modal show issue-modal" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="modal-content">
+        <div className="modal-header">
+          <h3>이력 관리 - {task.name}</h3>
+          <button className="modal-close-btn" onClick={onClose}>×</button>
+        </div>
+        <div className="modal-body">
+          <div className="issue-list-section">
+            {task.revisions && task.revisions.length > 0 ? (
+              <div className="issue-list">
+                {task.revisions.map((rev, idx) => (
+                  <div key={idx} className="issue-item" style={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch', position: 'relative', padding: '15px', minHeight: '80px', border: '1px solid #dee2e6', borderRadius: '8px', marginBottom: '15px', background: '#f8f9fa' }}>
+                    <div className="issue-details-wrapper" style={{ width: '100%' }}>
+                      <div className="issue-meta" style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
+                        <span className="issue-month" style={{background:'#f1f3f5', padding:'2px 8px', borderRadius:'12px', fontSize:'0.8rem', fontWeight:'600', color:'#495057'}}>{rev.revisionDate}</span>
+                      </div>
+                      <div style={{ marginBottom: '10px' }}>
+                        <div style={{ fontSize: '0.85rem', color: '#666', marginBottom: '5px', fontWeight: '600' }}>수정 사유</div>
+                        <p className="issue-content" style={{marginTop:'8px', whiteSpace:'pre-wrap', lineHeight:'1.5', fontSize:'0.9rem', color:'#333', padding:'8px', background:'white', borderRadius:'4px', border:'1px solid #e9ecef'}}>{rev.reason}</p>
+                      </div>
+                      <div>
+                        <div style={{ fontSize: '0.85rem', color: '#666', marginBottom: '5px', fontWeight: '600' }}>수정된 계획</div>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px', fontSize: '0.9rem' }}>
+                          <div style={{ padding: '8px', background: 'white', borderRadius: '4px', border: '1px solid #e9ecef' }}>
+                            <div style={{ fontSize: '0.75rem', color: '#6c757d', marginBottom: '3px' }}>시작일</div>
+                            <div style={{ color: '#333' }}>{rev.period.startDate || '-'}</div>
+                          </div>
+                          <div style={{ padding: '8px', background: 'white', borderRadius: '4px', border: '1px solid #e9ecef' }}>
+                            <div style={{ fontSize: '0.75rem', color: '#6c757d', marginBottom: '3px' }}>종료일</div>
+                            <div style={{ color: '#333' }}>{rev.period.endDate || '-'}</div>
+                          </div>
+                          <div style={{ padding: '8px', background: 'white', borderRadius: '4px', border: '1px solid #e9ecef' }}>
+                            <div style={{ fontSize: '0.75rem', color: '#6c757d', marginBottom: '3px' }}>계획MH</div>
+                            <div style={{ color: '#333' }}>{rev.period.hours}</div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="empty-issue-list" style={{ textAlign: 'center', padding: '40px', color: '#999' }}>
+                등록된 이력이 없습니다.
+              </p>
+            )}
+          </div>
+        </div>
+        <div className="modal-footer">
+          <button className="btn btn-secondary" onClick={onClose}>닫기</button>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 const IssueModal = ({ isOpen, onClose, task, onUpdate, user }: { isOpen: boolean; onClose: () => void; task: Task | null; onUpdate: (task: Task) => void, user: UserContextType }) => {
   const getTodayStr = () => { const today = new Date(); const kstOffset = 9 * 60 * 60 * 1000; return new Date(today.getTime() + kstOffset).toISOString().split('T')[0]; };
@@ -2060,7 +3034,7 @@ const IssueModal = ({ isOpen, onClose, task, onUpdate, user }: { isOpen: boolean
   const handleOpenEdit = (index: number, issue: Issue) => { if (issue.reviewed) { window.alert("검토 완료된 항목은 수정할 수 없습니다."); return; } setEditingIndex(index); setEditDate(issue.date || issue.month + '-01'); setEditContent(issue.issue); };
   const saveEdit = () => { if (editingIndex === null) return; const updatedIssues = task.monthlyIssues.map((issue, i) => { if (i === editingIndex) { return { ...issue, date: editDate, issue: editContent, reviewed: false, replies: issue.replies }; } return issue; }); onUpdate({ ...task, monthlyIssues: updatedIssues }); setEditingIndex(null); };
   const toggleReplySection = (index: number) => { if (replyIndex === index) setReplyIndex(null); else { setReplyIndex(index); setReplyText(''); } };
-  const addReply = (index: number) => { if (!replyText.trim()) return; const now = new Date(); const timestamp = now.toLocaleString('ko-KR', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).replace(/\. /g, '-').replace('.', ''); const newReply: Reply = { id: Date.now().toString() + Math.random().toString(), text: replyText, timestamp: timestamp, checked: false }; const updatedIssues = task.monthlyIssues.map((issue, i) => { if (i === index) { const safeReplies = (issue.replies || []).map(r => typeof r === 'string' ? { id: Math.random().toString(), text: r, timestamp: '-', checked: true } : r); return { ...issue, replies: [...safeReplies, newReply] }; } return issue; }); onUpdate({ ...task, monthlyIssues: updatedIssues }); setReplyText(''); };
+  const addReply = (index: number) => { if (!replyText.trim()) return; const now = new Date(); const timestamp = now.toLocaleString('ko-KR', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).replace(/\. /g, '-').replace('.', ''); const newReply: Reply = { id: Date.now().toString() + Math.random().toString(), text: replyText, timestamp: timestamp, checked: false, author: user?.name || '알 수 없음' }; const updatedIssues = task.monthlyIssues.map((issue, i) => { if (i === index) { const safeReplies = (issue.replies || []).map(r => typeof r === 'string' ? { id: Math.random().toString(), text: r, timestamp: '-', checked: true, author: '알 수 없음' } : r); return { ...issue, replies: [...safeReplies, newReply] }; } return issue; }); onUpdate({ ...task, monthlyIssues: updatedIssues }); setReplyText(''); };
   const deleteReply = (e: React.MouseEvent, issueIndex: number, replyId: string) => { e.stopPropagation(); setDeleteReplyTarget({ issueIndex, replyId }); };
   const executeDeleteReply = () => { if (!deleteReplyTarget) return; const { issueIndex, replyId } = deleteReplyTarget; const updatedIssues = task.monthlyIssues.map((issue, idx) => { if (idx !== issueIndex) return issue; return { ...issue, replies: issue.replies?.filter(r => r.id !== replyId) }; }); onUpdate({ ...task, monthlyIssues: updatedIssues }); setDeleteReplyTarget(null); };
   const executeDeleteIssue = () => { if (deleteTargetIndex === null) return; const updatedIssues = task.monthlyIssues.filter((_, i) => i !== deleteTargetIndex); onUpdate({ ...task, monthlyIssues: updatedIssues }); if (replyIndex === deleteTargetIndex) setReplyIndex(null); setDeleteTargetIndex(null); };
@@ -2117,10 +3091,11 @@ const IssueModal = ({ isOpen, onClose, task, onUpdate, user }: { isOpen: boolean
                                 const rTime = isObj ? reply.timestamp : '';
                                 const rId = isObj ? reply.id : Math.random().toString();
                                 const isChecked = isObj ? !!reply.checked : true;
+                                const rAuthor = isObj ? (reply.author || '알 수 없음') : '알 수 없음';
                                 return (
                                   <li key={rId} style={{ backgroundColor: 'white', border: '1px solid #dee2e6', borderRadius: '6px', padding: '10px', marginBottom: '8px', position: 'relative' }}>
                                     <div style={{paddingRight: '70px'}}>
-                                      <div style={{fontSize:'0.75rem', color:'#adb5bd', marginBottom:'4px', display: 'flex', alignItems: 'center', gap: '6px'}}>{rTime}{isChecked && <span style={{color: '#20c997', fontWeight: 'bold', fontSize: '0.7rem', border: '1px solid #20c997', padding: '0 4px', borderRadius: '4px'}}>확인됨</span>}</div>
+                                      <div style={{fontSize:'0.75rem', color:'#adb5bd', marginBottom:'4px', display: 'flex', alignItems: 'center', gap: '6px'}}><span style={{fontWeight: '600', color: '#495057'}}>{rAuthor}</span> {rTime}{isChecked && <span style={{color: '#20c997', fontWeight: 'bold', fontSize: '0.7rem', border: '1px solid #20c997', padding: '0 4px', borderRadius: '4px'}}>확인됨</span>}</div>
                                       <div style={{ lineHeight: '1.4', fontSize:'0.9rem', color: isChecked ? '#adb5bd' : '#212529', textDecoration: isChecked ? 'line-through' : 'none', textDecorationColor: '#ced4da' }}>{rText}</div>
                                     </div>
                                     <div onClick={(e) => { e.stopPropagation(); handleToggleReplyCheck(idx, rId); }} style={{ position: 'absolute', top: '10px', right: '36px', width: '34px', height: '20px', backgroundColor: isChecked ? '#20c997' : '#dee2e6', borderRadius: '10px', cursor: 'pointer', transition: 'background-color 0.2s', zIndex: 5 }} title={isChecked ? "확인 취소" : "확인 완료"}> <div style={{ width: '16px', height: '16px', backgroundColor: 'white', borderRadius: '50%', position: 'absolute', top: '2px', left: isChecked ? '16px' : '2px', transition: 'left 0.2s', boxShadow: '0 1px 2px rgba(0,0,0,0.2)' }} /> </div>
@@ -2192,8 +3167,8 @@ const TaskDetailModal = ({ task, onClose }: { task: Task | null; onClose: () => 
           {/* [삭제됨] 비활성 상태 안내 문구 제거 */}
 
           <h4 className="form-section-header">기간 및 시수</h4> 
-          <div className="detail-item"><span className="detail-label">현재 계획</span><span className="detail-value">{currentPlan.startDate} ~ {currentPlan.endDate} ({currentPlan.hours}h)</span></div> 
-          <div className="detail-item"><span className="detail-label">실적</span><span className="detail-value">{task.actual.startDate || '-'} ~ {task.actual.endDate || '-'} ({task.actual.hours}h)</span></div> 
+          <div className="detail-item"><span className="detail-label">현재 계획</span><span className="detail-value">{currentPlan.startDate} ~ {currentPlan.endDate} ({currentPlan.hours})</span></div> 
+          <div className="detail-item"><span className="detail-label">실적</span><span className="detail-value">{task.actual.startDate || '-'} ~ {task.actual.endDate || '-'} ({task.actual.hours})</span></div> 
         </div> 
       </div> 
     </div>
@@ -2206,7 +3181,7 @@ const fetchDailyLimitFromExternal = async (dateStr: string): Promise<number> => 
 
 const DailyPerformanceModal = ({ isOpen, onClose, tasks, onSave }: { isOpen: boolean; onClose: () => void; tasks: Task[]; onSave: (data: any) => void }) => {
   const [currentDate, setCurrentDate] = useState(new Date());
-  const [inputs, setInputs] = useState<{ [taskId: string]: number }>({});
+  const [inputs, setInputs] = useState<{ [taskId: string]: string }>({});
   const [dailyLimit, setDailyLimit] = useState<number>(8.0); 
   // [수정] 완료된 Task는 목록에서 제외하여 불필요한 스크롤 방지 (필요 시 제거 가능)
   const activeTasks = useMemo(() => tasks.filter(t => t.isActive !== false && t.status !== 'completed'), [tasks]);
@@ -2215,7 +3190,7 @@ const DailyPerformanceModal = ({ isOpen, onClose, tasks, onSave }: { isOpen: boo
     if (isOpen) {
       const dateStr = currentDate.toISOString().split('T')[0];
       fetchDailyLimitFromExternal(dateStr).then(limit => setDailyLimit(limit));
-      const loadedInputs: { [key: string]: number } = {};
+      const loadedInputs: { [key: string]: string } = {};
       activeTasks.forEach(task => { if (task.dailyLogs && task.dailyLogs[dateStr] !== undefined) { loadedInputs[task.id] = task.dailyLogs[dateStr]; } });
       setInputs(loadedInputs);
     }
@@ -2223,16 +3198,43 @@ const DailyPerformanceModal = ({ isOpen, onClose, tasks, onSave }: { isOpen: boo
 
   const handleDateChange = (days: number) => { const newDate = new Date(currentDate); newDate.setDate(newDate.getDate() + days); setCurrentDate(newDate); };
   const handleDateInputChange = (e: React.ChangeEvent<HTMLInputElement>) => { const val = e.target.value; if (val) { setCurrentDate(new Date(val)); } };
-  const totalUsed = useMemo(() => Object.values(inputs).reduce((sum: number, val: number) => sum + val, 0), [inputs]);
+  const totalUsed = useMemo(() => Object.values(inputs).reduce((sum: number, val: string) => sum + hhmmToNumber(val || '00.00'), 0), [inputs]);
   const remaining = dailyLimit - totalUsed;
   const handleInputChange = (taskId: string, valueStr: string) => {
-    const newValue = parseFloat(valueStr);
     if (valueStr === '') { const newInputs = { ...inputs }; delete newInputs[taskId]; setInputs(newInputs); return; }
-    if (isNaN(newValue) || newValue < 0) return;
-    const currentTaskOldValue = inputs[taskId] || 0;
+    
+    // hh.mm 형식 검증 (입력 중에는 mm이 60 초과해도 허용)
+    if (!validateHHMM(valueStr)) {
+      // 입력 중일 수 있으므로 일단 허용하되, 저장 시 검증
+      setInputs(prev => ({ ...prev, [taskId]: valueStr }));
+      return;
+    }
+    
+    // mm이 60을 초과하면 자동으로 변환
+    const normalized = normalizeHHMM(valueStr);
+    const newValue = hhmmToNumber(normalized);
+    const currentTaskOldValue = hhmmToNumber(inputs[taskId] || '00.00');
     const futureTotal = totalUsed - currentTaskOldValue + newValue;
-    if (futureTotal > dailyLimit) { alert(`총 가능 시간(${dailyLimit}시간)을 초과할 수 없습니다.`); return; }
-    setInputs(prev => ({ ...prev, [taskId]: newValue }));
+    if (futureTotal > dailyLimit) { alert(`총 가능 시간(${dailyLimit.toFixed(1)}시간)을 초과할 수 없습니다.`); return; }
+    setInputs(prev => ({ ...prev, [taskId]: normalized }));
+  };
+  
+  const handleInputBlur = (taskId: string, valueStr: string) => {
+    if (!valueStr) return;
+    
+    // 입력 완료 시 정규화 (mm이 60 초과하면 자동 변환)
+    if (validateHHMM(valueStr)) {
+      const normalized = normalizeHHMM(valueStr);
+      if (normalized !== valueStr) {
+        // 변환된 값으로 업데이트
+        const newValue = hhmmToNumber(normalized);
+        const currentTaskOldValue = hhmmToNumber(inputs[taskId] || '00.00');
+        const futureTotal = totalUsed - currentTaskOldValue + newValue;
+        if (futureTotal <= dailyLimit) {
+          setInputs(prev => ({ ...prev, [taskId]: normalized }));
+        }
+      }
+    }
   };
   const handleSave = () => { const dateStr = currentDate.toISOString().split('T')[0]; onSave({ date: dateStr, data: inputs }); onClose(); };
 
@@ -2286,7 +3288,17 @@ const DailyPerformanceModal = ({ isOpen, onClose, tasks, onSave }: { isOpen: boo
                       <div style={{ fontSize: '0.8em', color: '#999', marginTop: '4px' }}>{task.taskCode}</div> 
                     </td> 
                     <td style={{ padding: '8px', verticalAlign: 'middle' }}> 
-                      <input type="number" className="form-input" style={{ width: '100%', textAlign: 'center' }} placeholder="0" min="0" step="0.5" max={dailyLimit} value={inputs[task.id] !== undefined ? inputs[task.id] : ''} onChange={e => handleInputChange(task.id, e.target.value)} /> 
+                      <input 
+                        type="text" 
+                        className="form-input" 
+                        style={{ width: '100%', textAlign: 'center' }} 
+                        placeholder="hh.mm (mm:00~60)" 
+                        pattern="\d{2}\.\d{2}" 
+                        value={inputs[task.id] !== undefined ? inputs[task.id] : ''} 
+                        onChange={e => handleInputChange(task.id, e.target.value)}
+                        onBlur={e => handleInputBlur(task.id, e.target.value)}
+                        title="hh.mm 형식 (예: 08.30 = 8시간 30분, mm은 00~60, 60mm=1h)"
+                      /> 
                     </td> 
                   </tr>
                 ))} 
@@ -2332,12 +3344,12 @@ const App = () => {
       .sticky-header-container { position: sticky; top: 0; z-index: 1000; background: #f8f9fa; }
       .header { display: flex; align-items: center; padding: 15px 30px; background: white; border-bottom: 1px solid #e0e0e0; }
       .header-buttons { margin-left: auto; display: flex; gap: 10px; }
-      .view-controls { display: flex; flex-direction: column; gap: 15px; padding: 15px 30px; background: white; border-bottom: 1px solid #e0e0e0; }
-      .view-switcher { display: flex; gap: 10px; margin-bottom: 5px; }
+      .view-controls { display: flex; flex-direction: row; align-items: center; gap: 15px; padding: 7px 30px; background: white; border-bottom: 1px solid #e0e0e0; }
+      .view-switcher { display: flex; gap: 10px; margin-bottom: 0; }
       .view-switcher-btn { padding: 8px 16px; border: 1px solid #ddd; background: #f8f9fa; border-radius: 20px; cursor: pointer; font-size: 0.9rem; transition: all 0.2s; }
       .view-switcher-btn.active { background: #4e73df; color: white; border-color: #4e73df; font-weight: bold; }
       
-      .filter-wrapper { display: flex; align-items: center; gap: 20px; width: 100%; }
+      .filter-wrapper { display: flex; align-items: center; gap: 20px; width: 100%; margin-left: auto; }
       .filter-section { display: flex; align-items: center; gap: 10px; }
       .filter-section select { padding: 6px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 0.9rem; }
       .date-range-group { display: flex; align-items: center; gap: 15px; margin-left: auto; }
@@ -2740,11 +3752,11 @@ const App = () => {
         delete newTask.revised;
       }
       if (!newTask.revisions) newTask.revisions = [];
-      if ((!newTask.dailyLogs || Object.keys(newTask.dailyLogs).length === 0) && newTask.actual.hours > 0 && newTask.actual.startDate && newTask.actual.endDate) {
-        const logs: { [date: string]: number } = {};
+      if ((!newTask.dailyLogs || Object.keys(newTask.dailyLogs).length === 0) && hhmmToNumber(newTask.actual.hours) > 0 && newTask.actual.startDate && newTask.actual.endDate) {
+        const logs: { [date: string]: string } = {};
         const start = new Date(newTask.actual.startDate);
         const end = new Date(newTask.actual.endDate);
-        const totalHours = newTask.actual.hours;
+        const totalHours = hhmmToNumber(newTask.actual.hours);
         let dayCount = 0;
         let curr = new Date(start);
         while(curr <= end) { dayCount++; curr.setDate(curr.getDate() + 1); }
@@ -2752,7 +3764,7 @@ const App = () => {
           const hoursPerDay = totalHours / dayCount;
           curr = new Date(start);
           while(curr <= end) {
-            logs[curr.toISOString().split('T')[0]] = parseFloat(hoursPerDay.toFixed(1));
+            logs[curr.toISOString().split('T')[0]] = normalizeHHMM(numberToHHMM(hoursPerDay));
             curr.setDate(curr.getDate() + 1);
           }
         }
@@ -2783,9 +3795,14 @@ const App = () => {
   const [isIssueModalOpen, setIssueModalOpen] = useState(false);
   const [isEditModalOpen, setEditModalOpen] = useState(false);
   const [isDetailModalOpen, setDetailModalOpen] = useState(false);
+  const [uploadErrors, setUploadErrors] = useState<string[]>([]);
+  const [isErrorModalOpen, setIsErrorModalOpen] = useState(false);
+  const [errorModalTitle, setErrorModalTitle] = useState('엑셀 업로드 오류');
+  const [isRevisionModalOpen, setRevisionModalOpen] = useState(false);
   const [selectedTaskForIssues, setSelectedTaskForIssues] = useState<Task | null>(null);
   const [selectedTaskForEdit, setSelectedTaskForEdit] = useState<Task | null>(null);
   const [selectedTaskForDetail, setSelectedTaskForDetail] = useState<Task | null>(null);
+  const [selectedTaskForRevision, setSelectedTaskForRevision] = useState<Task | null>(null);
   const [isDailyModalOpen, setDailyModalOpen] = useState(false);
   const [uploadType, setUploadType] = useState<'full' | 'hours' | null>(null);
   const [notifications, setNotifications] = useState<Notification[]>([]);
@@ -2811,7 +3828,13 @@ const App = () => {
   const getTeamMembers = useCallback((teamId: string) => { const team = data.organization.departments[0].teams.find(t => t.id === teamId); return team ? team.groups.flatMap(g => g.members.map(m => m.id)) : []; }, [data.organization]);
   const getGroupMembers = useCallback((teamId: string, groupId: string) => { const team = data.organization.departments[0].teams.find(t => t.id === teamId); const group = team ? team.groups.find(g => g.id === groupId) : null; return group ? group.members.map(m => m.id) : []; }, [data.organization]);
   const getMemberInfo = useCallback((memberId: string) => { for (const dept of data.organization.departments) { for (const team of dept.teams) { for (const group of team.groups) { const member = group.members.find(m => m.id === memberId); if (member) return { ...member, group: group.name, team: team.name, department: dept.name, teamId: team.id }; } } } return null; }, [data.organization]);
-  const addNotification = (message: string, type: 'success' | 'error' = 'success') => { const id = Date.now(); setNotifications(prev => [...prev, { id, message, type }]); setTimeout(() => setNotifications(prev => prev.filter(n => n.id !== id)), 3000); };
+  const addNotification = (message: string, type: 'success' | 'error' = 'success') => { 
+    const id = Date.now() + Math.random(); 
+    setNotifications(prev => [...prev, { id, message, type }]); 
+    setTimeout(() => {
+      setNotifications(prev => prev.filter(n => n.id !== id));
+    }, 3000);
+  };
   
   useEffect(() => {
     if (currentUser) {
@@ -2855,97 +3878,668 @@ const App = () => {
   //2
   // [수정] 표준양식 다운로드 (중요도 컬럼 제거 버전)
   const downloadTemplate = () => {
-    // 1. 데이터 정의
-    const wsData = [
-      // Row 1: 안내 문구
-      ["관리 입력 사항 (시스템 자동 생성/관리) - 건드리지 마세요"],
-      // Row 2: 안내 문구
-      ["최초 입력 필수 사항 (사용자 입력) - '*' 표시된 항목은 필수입니다"],
-      // Row 3: 공백
+    const wb = XLSX.utils.book_new();
+
+    // 1. Task 등록 템플릿 시트 (내보내기 형식과 동일)
+    const taskWsData = [
+      ["Task 목록 내보내기 데이터 (시스템 생성)"],
+      ["'*' 표시는 필수 관리 항목입니다."],
       [],
-      // Row 4: 헤더 ('중요도' 제거됨)
       [
-        "Task ID",             // A (Hidden)
-        "*실",                 // B (필수)
-        "*팀",                 // C (필수)
-        "*그룹",               // D (필수)
-        "*담당자",             // E (필수)
-        "Task Code",           // F
-        "Category Code",       // G (Hidden)
-        // "*중요도",          // [삭제됨]
-        "*Task2",             // H (필수) - 인덱스 당겨짐
-        "세부계획 Lv.1 code",  // I (Hidden)
-        "*세부계획 Lv.1",      // J (필수)
-        "세부계획 Lv.2 code",  // K (Hidden)
-        "*세부계획 Lv.2",      // L (필수)
-        "세부계획 Lv.3 code",  // M (Hidden)
-        "*세부계획 Lv.3",      // N (필수)
-        "*계획(시작일)",       // O (필수)
-        "*계획(종료일)",       // P (필수)
-        "실적(시작일)",        // Q
-        "실적(종료일)",        // R
-        "*계획MH",             // S (필수)
-        "실적MH",              // T
-        "진척률",              // U
-        "진행상태",            // V
-        "이슈 및 해결방안",    // W
-        "관리자 검토의견"      // X
-      ],
-      // Row 5: 샘플 데이터 ('상' 값 제거됨)
-      [
-        "AAA-S01.2-H01.01.01", "ENG혁신실", "AI개발팀", "자연어처리그룹", "김철수",
-        "A01.01.B-01.01.01", "A01.01.B", /* "상", 삭제 */ "프로세스 구체화 (샘플)",
-        "01", "연구개발", "01", "GPT모델", "01", "파인튜닝",
-        "2024-11-06", "2024-12-03", "", "", 160, 0, "0%", "지연", "", ""
+        "Task ID", "*실", "*팀", "*그룹", "*담당자",
+        "업무구분 Lv.1 code", "*업무구분 Lv.1", "업무구분 Lv.2 code", "*업무구분 Lv.2",
+        "Task Lv.1 Code", "Task Lv.1", "Task Code", "*Task 2",
+        "*계획(시작일)", "*계획(종료일)", "실적(시작일)", "실적(종료일)",
+        "*계획MH\n(hh.mm, mm:00~60)", "실적MH\n(hh.mm, mm:00~60)", "진척률", "진행상태", "이슈 및 해결방안", "관리자 검토의견"
       ]
     ];
-
-    // 2. 시트 생성
-    const ws = XLSX.utils.aoa_to_sheet(wsData);
-
-    // 3. 컬럼 숨김(Hidden) 및 너비 설정 (!cols) - 중요도 컬럼 제거 및 인덱스 조정
-    ws['!cols'] = [
-      { wch: 20, hidden: true }, // A: Task ID (숨김)
-      { wch: 10 },               // B: *실
-      { wch: 10 },               // C: *팀
-      { wch: 15 },               // D: *그룹
-      { wch: 10 },               // E: *담당자
-      { wch: 20 },               // F: Task Code
-      { wch: 15, hidden: true }, // G: Category Code (숨김)
-      // { wch: 8 },             // [삭제됨] 중요도
-      { wch: 35 },               // H: *Task명
-      { wch: 10, hidden: true }, // I: Lv1 Code (숨김)
-      { wch: 15 },               // J: *Lv1
-      { wch: 10, hidden: true }, // K: Lv2 Code (숨김)
-      { wch: 15 },               // L: *Lv2
-      { wch: 10, hidden: true }, // M: Lv3 Code (숨김)
-      { wch: 15 },               // N: *Lv3
-      { wch: 12 },               // O: *계획 시작
-      { wch: 12 },               // P: *계획 종료
-      { wch: 12 },               // Q: 실적 시작
-      { wch: 12 },               // R: 실적 종료
-      { wch: 8 },                // S: *계획MH
-      { wch: 8 },                // T: 실적MH
-      { wch: 8 },                // U: 진척률
-      { wch: 10 },               // V: 진행상태
-      { wch: 25 },               // W: 이슈
-      { wch: 25 }                // X: 검토의견
+    
+    // 현재 Task 목록 데이터 추가 (내보내기 형식과 동일)
+    const statusMap: Record<string, string> = { 
+      'not-started': '미시작', 
+      'in-progress': '진행중', 
+      'delayed': '지연', 
+      'completed': '완료' 
+    };
+    
+    data.tasks.forEach(task => {
+      const currentPlan = getCurrentPlan(task);
+      const planHours = currentPlan.hours || '00.00';
+      const actualHours = task.actual.hours || '00.00';
+      const planHoursNum = hhmmToNumber(planHours);
+      const actualHoursNum = hhmmToNumber(actualHours);
+      const progressRate = planHoursNum > 0 ? Math.round((actualHoursNum / planHoursNum) * 100) : 0;
+      
+      const latestIssue = task.monthlyIssues && task.monthlyIssues.length > 0 
+        ? task.monthlyIssues[task.monthlyIssues.length - 1].issue 
+        : '';
+      const reviewOpinion = task.monthlyIssues && task.monthlyIssues.length > 0 
+        ? task.monthlyIssues.find(issue => issue.replies && issue.replies.length > 0)?.replies?.[0]?.text || ''
+        : '';
+      
+      taskWsData.push([
+        task.id,
+        task.department || '',
+        task.team || '',
+        task.group || '',
+        task.assigneeName || '',
+        '', // 업무구분 Lv.1 code
+        task.category1 || '',
+        '', // 업무구분 Lv.2 code
+        task.category2 || '',
+        '', // Task Lv.1 Code
+        task.category3 || '',
+        task.taskCode || '',
+        task.name || '',
+        currentPlan.startDate || '',
+        currentPlan.endDate || '',
+        task.actual.startDate || '',
+        task.actual.endDate || '',
+        planHours,
+        actualHours,
+        `${progressRate}%`,
+        statusMap[task.status] || '미시작',
+        latestIssue,
+        reviewOpinion
+      ]);
+    });
+    
+    // 데이터가 없으면 샘플 데이터 추가
+    if (data.tasks.length === 0) {
+      taskWsData.push([
+        "AAA-S01.2-H01.01.01", "ENG혁신실", "AI개발팀", "자연어처리그룹", "김철수",
+        "", "연구개발", "", "GPT모델", "", "파인튜닝", "A01.01.B-01.01.01", "프로세스 구체화 (샘플)",
+        "2024-11-06", "2024-12-03", "", "", "160.00", "00.00", "0%", "지연", "", ""
+      ]);
+    }
+    const taskWs = XLSX.utils.aoa_to_sheet(taskWsData);
+    taskWs['!cols'] = [
+      { wch: 20, hidden: true }, { wch: 10 }, { wch: 10 }, { wch: 15 }, { wch: 10 },
+      { wch: 15 }, { wch: 15 }, { wch: 15 }, { wch: 15 },
+      { wch: 15 }, { wch: 15 }, { wch: 20 }, { wch: 35 },
+      { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 12 },
+      { wch: 8 }, { wch: 8 }, { wch: 8 }, { wch: 10 }, { wch: 30 }, { wch: 20 }
     ];
-
-    // 4. 셀 병합 (!merges) - 전체 컬럼 수 변경 반영 (25개 -> 24개)
-    // 인덱스는 0부터 시작하므로 c: 24에서 c: 23으로 변경
-    ws['!merges'] = [
-      { s: { r: 0, c: 0 }, e: { r: 0, c: 23 } }, // 1행 전체 병합
-      { s: { r: 1, c: 0 }, e: { r: 1, c: 23 } }  // 2행 전체 병합
+    taskWs['!merges'] = [
+      { s: { r: 0, c: 0 }, e: { r: 0, c: 21 } },
+      { s: { r: 1, c: 0 }, e: { r: 1, c: 21 } }
     ];
+    XLSX.utils.book_append_sheet(wb, taskWs, "Task_등록");
 
-    // 5. 파일 내보내기
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Task_Template");
-    XLSX.writeFile(wb, "task_upload_template.xlsx");
+    // 2. 업무 구분 템플릿 시트
+    const categoryWsData = [['Lv1 코드', 'Lv1 명칭', 'Lv2 코드', 'Lv2 명칭', 'Lv3 코드', 'Lv3 명칭']];
+    const activeCategoryData = data.organization.departments[0]?.teams[0]?.categoryMaster || {};
+    Object.keys(activeCategoryData).forEach(cat1Name => {
+      const cat1Code = categoryCodeMapping.category1[cat1Name] || '';
+      const cat2Obj = activeCategoryData[cat1Name];
+      Object.keys(cat2Obj).forEach(cat2Name => {
+        const cat2Code = '';
+        const cat3List = cat2Obj[cat2Name] || [];
+        if (cat3List.length > 0) {
+          cat3List.forEach((cat3Name: string, idx3: number) => {
+            categoryWsData.push([
+              cat1Code,
+              cat1Name,
+              cat2Code,
+              cat2Name,
+              String(idx3 + 1).padStart(2, '0'),
+              cat3Name
+            ]);
+          });
+        } else {
+          categoryWsData.push([cat1Code, cat1Name, cat2Code, cat2Name, '', '']);
+        }
+      });
+    });
+    if (categoryWsData.length === 1) {
+      categoryWsData.push(['A01', '연구개발', '01', 'GPT모델', '01', '파인튜닝']);
+    }
+    const categoryWs = XLSX.utils.aoa_to_sheet(categoryWsData);
+    categoryWs['!cols'] = [{ wch: 10 }, { wch: 20 }, { wch: 10 }, { wch: 20 }, { wch: 10 }, { wch: 20 }];
+    XLSX.utils.book_append_sheet(wb, categoryWs, "업무_구분");
+
+    // 3. OBS 관리 템플릿 시트
+    const obsWsData = [['Lv.1 코드', 'Lv.1 분류 (과제 유형)', 'Lv.2 코드', 'Lv.2 분류 (팀 선택)', 'Lv.3 코드', 'Lv.3 분류 (업무 구분 선택)']];
+    const activeOBSData = data.organization.departments[0]?.teams[0]?.obsMaster || {};
+    
+    // OBS 코드 생성 헬퍼 함수 (로컬)
+    const generateOBSCodeForTemplate = (lv1: string, lv2: string, lv3: string) => {
+      const lv1Code = obsCodeMapping.lv1[lv1 as keyof typeof obsCodeMapping.lv1] || '';
+      const lv2Code = lv2 ? ((orgCodeMapping.teams as any)[lv2] || '') : '';
+      let lv3Code = '';
+      if (lv3) {
+        const categoryMaster = data.organization.departments[0]?.teams[0]?.categoryMaster || categoryMasterData;
+        outerLoop:
+        for (const cat1Key of Object.keys(categoryMaster)) {
+          const cat2Obj = categoryMaster[cat1Key];
+          for (const cat2Key of Object.keys(cat2Obj)) {
+            const cat3Array = cat2Obj[cat2Key];
+            if (Array.isArray(cat3Array) && cat3Array.includes(lv3)) {
+              const cat1Code = (categoryCodeMapping.category1 as any)[cat1Key.split(' (')[0]] || '';
+              const cat2Index = Object.keys(cat2Obj).indexOf(cat2Key) + 1;
+              const cat3Index = cat3Array.indexOf(lv3) + 1;
+              lv3Code = `${cat1Code}.${String(cat2Index).padStart(2, '0')}.${String(cat3Index).padStart(2, '0')}`;
+              break outerLoop;
+            }
+          }
+        }
+      }
+      return { lv1Code, lv2Code, lv3Code };
+    };
+    
+    Object.keys(activeOBSData).forEach(lv1 => {
+      const lv2Obj = activeOBSData[lv1];
+      Object.keys(lv2Obj).forEach(lv2 => {
+        const lv3List = lv2Obj[lv2] || [];
+        if (lv3List.length > 0) {
+          lv3List.forEach((lv3: string) => {
+            const codes = generateOBSCodeForTemplate(lv1, lv2, lv3);
+            obsWsData.push([codes.lv1Code, lv1, codes.lv2Code, lv2, codes.lv3Code, lv3]);
+          });
+        } else {
+          const codes = generateOBSCodeForTemplate(lv1, lv2, '');
+          obsWsData.push([codes.lv1Code, lv1, codes.lv2Code, lv2, '', '']);
+        }
+      });
+    });
+    if (obsWsData.length === 1) {
+      obsWsData.push(['O01', '1. 중점과제', '', '팀명 예시', '', '업무 구분 예시']);
+    }
+    const obsWs = XLSX.utils.aoa_to_sheet(obsWsData);
+    obsWs['!cols'] = [{ wch: 10 }, { wch: 25 }, { wch: 10 }, { wch: 30 }, { wch: 10 }, { wch: 35 }];
+    XLSX.utils.book_append_sheet(wb, obsWs, "OBS_관리");
+
+    // 4. 사용자 관리 템플릿 시트
+    const userWsData = [['*이름', '*ID', '*비밀번호', '*실', '*팀', '*그룹', '직책', '권한']];
+    const allMembers = data.organization.departments.flatMap(d => 
+      d.teams.flatMap(t => 
+        t.groups.flatMap(g => 
+          g.members.map(m => ({ ...m, deptName: d.name, teamName: t.name, groupName: g.name }))
+        )
+      )
+    );
+    allMembers.forEach(member => {
+      userWsData.push([
+        member.name,
+        member.loginId,
+        member.password || '',
+        member.deptName,
+        member.teamName,
+        member.groupName,
+        member.position,
+        member.role === 'admin' ? '관리자' : member.role === 'team_leader' ? '팀장' : member.role === 'group_leader' ? '그룹장' : '팀원'
+      ]);
+    });
+    if (userWsData.length === 1) {
+      userWsData.push(['홍길동', 'hong', '123', 'ENG혁신실', 'AI개발팀', '자연어처리그룹', '선임연구원', '팀원']);
+    }
+    const userWs = XLSX.utils.aoa_to_sheet(userWsData);
+    userWs['!cols'] = [{ wch: 15 }, { wch: 15 }, { wch: 15 }, { wch: 15 }, { wch: 15 }, { wch: 15 }, { wch: 15 }, { wch: 10 }];
+    XLSX.utils.book_append_sheet(wb, userWs, "사용자_관리");
+
+    // 파일 내보내기
+    XLSX.writeFile(wb, "표준양식_모음.xlsx");
   };
   //2
   //2601081221
+
+  // 통합 업로드 핸들러 (모든 시트 처리)
+  const handleIntegratedUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.readAsArrayBuffer(file);
+
+    reader.onload = (event) => {
+      const data = event.target?.result;
+      if (!data) return;
+
+      try {
+        if (typeof XLSX === 'undefined') {
+          alert('XLSX 라이브러리가 로드되지 않았습니다.');
+          return;
+        }
+
+        const workbook = XLSX.read(data, { type: 'array' });
+        const sheetNames = workbook.SheetNames;
+        let processedSheets = 0;
+        let totalErrors: string[] = [];
+
+        // 각 시트 처리
+        sheetNames.forEach(sheetName => {
+          const sheet = workbook.Sheets[sheetName];
+          const jsonData = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false }) as any[][];
+
+          if (!jsonData || jsonData.length < 2) return;
+
+          try {
+            // 시트 이름에 따라 처리
+            if (sheetName === 'Task_등록' || sheetName.includes('Task')) {
+              // Task 등록 처리 - 내보내기 형식에 맞춰 처리 (Row 4가 헤더, Row 5부터 데이터)
+              const rows = jsonData.slice(4); // 헤더 4줄 제외하고 데이터 시작
+              handleTaskUploadFromSheet(rows);
+              processedSheets++;
+            } else if (sheetName === '업무_구분' || sheetName.includes('업무')) {
+              // 업무 구분 처리
+              const rows = jsonData.slice(1); // 헤더 제외
+              handleCategoryUpload(rows);
+              processedSheets++;
+            } else if (sheetName === 'OBS_관리' || sheetName.includes('OBS')) {
+              // OBS 관리 처리
+              const rows = jsonData.slice(1); // 헤더 제외
+              handleOBSUpload(rows);
+              processedSheets++;
+            } else if (sheetName === '사용자_관리' || sheetName.includes('사용자')) {
+              // 사용자 관리 처리
+              if (jsonData.length < 2) {
+                totalErrors.push(`${sheetName} 시트: 데이터가 없거나 양식이 맞지 않습니다.`);
+                return;
+              }
+              const rows = jsonData.slice(1); // 헤더 제외
+              const userErrors = handleUserUpload(rows);
+              if (userErrors && userErrors.length > 0) {
+                totalErrors.push(...userErrors.map(err => `[${sheetName} 시트] ${err}`));
+              }
+              processedSheets++;
+            }
+          } catch (error: any) {
+            totalErrors.push(`${sheetName} 시트 처리 중 오류: ${error.message}`);
+          }
+        });
+
+        if (totalErrors.length > 0) {
+          setUploadErrors(totalErrors);
+          setIsErrorModalOpen(true);
+          addNotification('통합 업로드 중 일부 오류가 발생했습니다.', 'error');
+        } else if (processedSheets > 0) {
+          addNotification(`${processedSheets}개 시트가 성공적으로 처리되었습니다.`, 'success');
+        } else {
+          alert('처리할 수 있는 시트가 없습니다.');
+        }
+
+        // 파일 입력 초기화
+        e.target.value = '';
+      } catch (error) {
+        console.error('통합 업로드 오류:', error);
+        alert('파일을 읽는 중 오류가 발생했습니다.');
+        e.target.value = '';
+      }
+    };
+  };
+
+  // Task 등록 업로드 헬퍼 (내보내기 형식)
+  const handleTaskUploadFromSheet = (rows: any[][]) => {
+    const todayStr = new Date().toISOString().split('T')[0];
+    let updatedTaskList = [...data.tasks];
+    let createCount = 0;
+    let updateCount = 0;
+    let skipCount = 0;
+
+    const taskMapByCode = new Map<string, number[]>();
+    const taskMapByName = new Map<string, number[]>();
+    
+    updatedTaskList.forEach((t, index) => {
+      if (t.taskCode) {
+        if (!taskMapByCode.has(t.taskCode)) {
+          taskMapByCode.set(t.taskCode, []);
+        }
+        taskMapByCode.get(t.taskCode)!.push(index);
+      }
+      if (t.name) {
+        if (!taskMapByName.has(t.name)) {
+          taskMapByName.set(t.name, []);
+        }
+        taskMapByName.get(t.name)!.push(index);
+      }
+    });
+    
+    const newCodesInBatch = new Set<string>();
+
+    rows.forEach((row, idx) => {
+      const rawAssignee = row[4];
+      const rawTaskName = row[12];
+
+      if (!rawAssignee || !rawTaskName) {
+        skipCount++;
+        return;
+      }
+
+      const inputTaskCode = row[11] ? String(row[11]).trim() : '';
+      const taskName = String(rawTaskName).trim();
+      const assigneeName = String(rawAssignee).trim();
+
+      const planStart = row[13] ? String(row[13]).trim() : todayStr;
+      const planEnd = row[14] ? String(row[14]).trim() : todayStr;
+      const actualStart = row[15] ? String(row[15]).trim() : null;
+      const actualEnd = row[16] ? String(row[16]).trim() : null;
+      const planMH = row[17] ? normalizeHHMM(String(row[17]).trim()) : '00.00';
+      const actualMH = row[18] ? normalizeHHMM(String(row[18]).trim()) : '00.00';
+      
+      let statusText = row[20] ? String(row[20]).trim() : '';
+      let newStatus: TaskStatus | null = null;
+      if (statusText === '완료') newStatus = 'completed';
+      else if (statusText === '진행중') newStatus = 'in-progress';
+      else if (statusText === '지연') newStatus = 'delayed';
+      else if (statusText === '미시작') newStatus = 'not-started';
+
+      const issueText = row[21] ? String(row[21]).trim() : '';
+
+      if (inputTaskCode && taskMapByCode.has(inputTaskCode)) {
+        const targetIndices = taskMapByCode.get(inputTaskCode)!;
+        targetIndices.forEach(targetIndex => {
+          const targetTask = updatedTaskList[targetIndex];
+          const updatedActual = { ...targetTask.actual };
+          if (actualStart) updatedActual.startDate = actualStart;
+          if (actualEnd) updatedActual.endDate = actualEnd;
+          if (row[18] !== undefined && actualMH !== '00.00') updatedActual.hours = actualMH;
+
+          let updatedIssues = [...targetTask.monthlyIssues];
+          if (issueText) {
+            updatedIssues.push({
+              date: todayStr,
+              issue: `[Excel] ${issueText}`,
+              reviewed: false,
+              replies: []
+            });
+          }
+
+          updatedTaskList[targetIndex] = {
+            ...targetTask,
+            actual: updatedActual,
+            status: newStatus || targetTask.status,
+            monthlyIssues: updatedIssues
+          };
+        });
+        updateCount += targetIndices.length;
+      }
+      else if (!inputTaskCode && taskMapByName.has(taskName)) {
+        const targetIndices = taskMapByName.get(taskName)!;
+        targetIndices.forEach(targetIndex => {
+          const targetTask = updatedTaskList[targetIndex];
+          const updatedActual = { ...targetTask.actual };
+          if (actualStart) updatedActual.startDate = actualStart;
+          if (actualEnd) updatedActual.endDate = actualEnd;
+          if (row[18] !== undefined && actualMH !== '00.00') updatedActual.hours = actualMH;
+
+          let updatedIssues = [...targetTask.monthlyIssues];
+          if (issueText) {
+            updatedIssues.push({
+              date: todayStr,
+              issue: `[Excel] ${issueText}`,
+              reviewed: false,
+              replies: []
+            });
+          }
+
+          updatedTaskList[targetIndex] = {
+            ...targetTask,
+            actual: updatedActual,
+            status: newStatus || targetTask.status,
+            monthlyIssues: updatedIssues
+          };
+        });
+        updateCount += targetIndices.length;
+      } 
+      else {
+        let finalTaskCode = inputTaskCode;
+        
+        if (!finalTaskCode && taskMapByName.has(taskName)) {
+          const existingTaskIndices = taskMapByName.get(taskName)!;
+          const existingTask = updatedTaskList[existingTaskIndices[0]];
+          finalTaskCode = existingTask.taskCode;
+        }
+        
+        if (!finalTaskCode || newCodesInBatch.has(finalTaskCode)) {
+          const baseCode = finalTaskCode || `T-${todayStr.replace(/-/g, '')}-${String(idx + 1).padStart(3, '0')}`;
+          let suffix = 0;
+          let tempCode = baseCode;
+          while (taskMapByCode.has(tempCode) || newCodesInBatch.has(tempCode)) {
+            suffix++;
+            tempCode = `${baseCode}_${suffix}`;
+          }
+          finalTaskCode = tempCode;
+        }
+        newCodesInBatch.add(finalTaskCode);
+
+        let foundMember: any = null;
+        outerSearch:
+        for (const d of data.organization.departments) { 
+          for (const t of d.teams) {
+            for (const g of t.groups) {
+              const m = g.members.find(mem => mem.name === assigneeName);
+              if (m) {
+                foundMember = { ...m, group: g.name, team: t.name, department: d.name };
+                break outerSearch;
+              }
+            }
+          }
+        }
+
+        const assigneeId = foundMember ? foundMember.id : `guest_${Date.now()}_${idx}`;
+
+        const newTask: Task = {
+          id: `upload_${Date.now()}_${idx}`,
+          taskCode: finalTaskCode,
+          category1: row[6] || '',
+          category2: row[8] || '',
+          category3: row[10] || '',
+          name: taskName,
+          department: foundMember ? foundMember.department : (row[1] || '미지정'),
+          team: foundMember ? foundMember.team : (row[2] || '미지정'),
+          group: foundMember ? foundMember.group : (row[3] || '미지정'),
+          assignee: assigneeId,
+          assigneeName: assigneeName,
+          planned: { startDate: planStart, endDate: planEnd, hours: planMH },
+          revisions: [],
+          actual: { startDate: actualStart, endDate: actualEnd, hours: actualMH },
+          monthlyIssues: issueText ? [{
+            date: todayStr, 
+            issue: `[Excel] ${issueText}`, 
+            reviewed: false, 
+            replies: []
+          }] : [],
+          status: newStatus || 'not-started',
+          isActive: true
+        };
+
+        const newTaskIndex = updatedTaskList.length;
+        updatedTaskList.push(newTask);
+        
+        if (!taskMapByCode.has(finalTaskCode)) {
+          taskMapByCode.set(finalTaskCode, []);
+        }
+        taskMapByCode.get(finalTaskCode)!.push(newTaskIndex);
+        
+        if (!taskMapByName.has(taskName)) {
+          taskMapByName.set(taskName, []);
+        }
+        taskMapByName.get(taskName)!.push(newTaskIndex);
+        
+        createCount++;
+      }
+    });
+
+    if (createCount > 0 || updateCount > 0) {
+      setData(prev => ({ ...prev, tasks: updatedTaskList }));
+      addNotification(`Task 등록: 신규 ${createCount}건, 업데이트 ${updateCount}건 (제외 ${skipCount}건)`, 'success');
+    }
+  };
+
+  // 업무 구분 업로드 헬퍼
+  const handleCategoryUpload = (rows: any[][]) => {
+    const activeCategoryData = data.organization.departments[0]?.teams[0]?.categoryMaster || {};
+    const newCategoryData = JSON.parse(JSON.stringify(activeCategoryData));
+    let addedCount = 0;
+
+    rows.forEach((row) => {
+      const [lv1Code, lv1Name, lv2Code, lv2Name, lv3Code, lv3Name] = row;
+      if (!lv1Name) return;
+
+      if (!newCategoryData[lv1Name]) {
+        newCategoryData[lv1Name] = {};
+      }
+      if (lv2Name && !newCategoryData[lv1Name][lv2Name]) {
+        newCategoryData[lv1Name][lv2Name] = [];
+      }
+      if (lv3Name && lv2Name && !newCategoryData[lv1Name][lv2Name].includes(lv3Name)) {
+        newCategoryData[lv1Name][lv2Name].push(lv3Name);
+        addedCount++;
+      }
+    });
+
+    if (addedCount > 0) {
+      const newOrg = JSON.parse(JSON.stringify(data.organization));
+      if (newOrg.departments[0]?.teams[0]) {
+        newOrg.departments[0].teams[0].categoryMaster = newCategoryData;
+        setData(prev => ({ ...prev, organization: newOrg }));
+        addNotification(`업무 구분 ${addedCount}개 추가`, 'success');
+      }
+    }
+  };
+
+  // OBS 관리 업로드 헬퍼
+  const handleOBSUpload = (rows: any[][]) => {
+    const activeOBSData = data.organization.departments[0]?.teams[0]?.obsMaster || {};
+    const newOBSData = JSON.parse(JSON.stringify(activeOBSData));
+    let addedCount = 0;
+
+    rows.forEach((row) => {
+      // 템플릿 형식: [Lv.1 코드, Lv.1 분류, Lv.2 코드, Lv.2 분류, Lv.3 코드, Lv.3 분류]
+      // 기존 형식도 지원: [Lv.1 분류, Lv.2 분류, Lv.3 분류] (하위 호환성)
+      let lv1 = '', lv2 = '', lv3 = '';
+      
+      if (row.length >= 6) {
+        // 새 형식 (code 포함)
+        lv1 = row[1]?.toString().trim() || '';
+        lv2 = row[3]?.toString().trim() || '';
+        lv3 = row[5]?.toString().trim() || '';
+      } else {
+        // 기존 형식 (하위 호환성)
+        lv1 = row[0]?.toString().trim() || '';
+        lv2 = row[1]?.toString().trim() || '';
+        lv3 = row[2]?.toString().trim() || '';
+      }
+      
+      if (!lv1 || !lv2) return;
+
+      if (!newOBSData[lv1]) {
+        newOBSData[lv1] = {};
+      }
+      if (!newOBSData[lv1][lv2]) {
+        newOBSData[lv1][lv2] = [];
+      }
+      if (lv3 && !newOBSData[lv1][lv2].includes(lv3)) {
+        newOBSData[lv1][lv2].push(lv3);
+        addedCount++;
+      }
+    });
+
+    if (addedCount > 0) {
+      const newOrg = JSON.parse(JSON.stringify(data.organization));
+      if (newOrg.departments[0]?.teams[0]) {
+        newOrg.departments[0].teams[0].obsMaster = newOBSData;
+        setData(prev => ({ ...prev, organization: newOrg }));
+        addNotification(`OBS 관리 ${addedCount}개 추가`, 'success');
+      }
+    }
+  };
+
+  // 사용자 관리 업로드 헬퍼
+  const handleUserUpload = (rows: any[][]): string[] => {
+    const newOrg = JSON.parse(JSON.stringify(data.organization));
+    let addedCount = 0;
+    let skippedCount = 0;
+    const errors: string[] = [];
+    const existingLoginIds = new Set<string>();
+
+    // 기존 ID 수집
+    newOrg.departments.forEach((d: any) => {
+      d.teams.forEach((t: any) => {
+        t.groups.forEach((g: any) => {
+          g.members.forEach((m: any) => {
+            if (m.loginId) existingLoginIds.add(m.loginId);
+          });
+        });
+      });
+    });
+
+    rows.forEach((row, index) => {
+      const rowIndex = index + 2; // 헤더 제외하고 실제 행 번호
+      const [name, loginId, password, deptName, teamName, groupName, position, roleText] = row;
+
+      // 필수 항목 체크
+      if (!name || !loginId || !deptName || !teamName || !groupName) {
+        errors.push(`행 ${rowIndex}: 필수 항목(이름, ID, 실, 팀, 그룹)이 누락되었습니다.`);
+        skippedCount++;
+        return;
+      }
+
+      // ID 중복 체크
+      if (existingLoginIds.has(loginId)) {
+        errors.push(`행 ${rowIndex}: ID "${loginId}"가 이미 존재합니다.`);
+        skippedCount++;
+        return;
+      }
+
+      // 조직 구조 찾기
+      const dept = newOrg.departments.find((d: any) => d.name === deptName);
+      if (!dept) {
+        errors.push(`행 ${rowIndex}: 실 "${deptName}"을 찾을 수 없습니다.`);
+        skippedCount++;
+        return;
+      }
+
+      const team = dept.teams.find((t: any) => t.name === teamName);
+      if (!team) {
+        errors.push(`행 ${rowIndex}: 팀 "${teamName}"을 찾을 수 없습니다.`);
+        skippedCount++;
+        return;
+      }
+
+      const group = team.groups.find((g: any) => g.name === groupName);
+      if (!group) {
+        errors.push(`행 ${rowIndex}: 그룹 "${groupName}"을 찾을 수 없습니다.`);
+        skippedCount++;
+        return;
+      }
+
+      // 권한 텍스트를 role로 변환
+      let role: UserRole = 'member';
+      if (roleText === '관리자') role = 'admin';
+      else if (roleText === '팀장') role = 'team_leader';
+      else if (roleText === '그룹장') role = 'group_leader';
+      else if (roleText === '팀원') role = 'member';
+
+      // 사용자 추가
+      const newMemberId = `emp_${Date.now()}_${index}`;
+      group.members.push({
+        id: newMemberId,
+        name,
+        loginId,
+        password: password || '123',
+        position: position || '선임연구원',
+        role
+      });
+
+      existingLoginIds.add(loginId);
+      addedCount++;
+    });
+
+    if (errors.length > 0) {
+      setUploadErrors(errors);
+      setIsErrorModalOpen(true);
+    }
+
+    if (addedCount > 0) {
+      setData(prev => ({ ...prev, organization: newOrg }));
+      addNotification(`사용자 ${addedCount}명 추가${skippedCount > 0 ? ` (${skippedCount}건 건너뜀)` : ''}`, 'success');
+    } else if (skippedCount > 0) {
+      addNotification(`추가된 사용자가 없습니다. (${skippedCount}건 건너뜀)`, 'error');
+    }
+
+    return errors;
+  };
 
   const handleOpenTaskModal = () => {
     setTaskModalOpen(true);
@@ -2956,6 +4550,33 @@ const App = () => {
       ...prevData,
       tasks: [...prevData.tasks, task]
     }));
+  };
+
+  // Lv.3 마스터 데이터 추가 핸들러
+  const handleUpdateCategoryMaster = (category1: string, category2: string, category3: string) => {
+    setData(prevData => {
+      const newOrganization = JSON.parse(JSON.stringify(prevData.organization));
+      
+      // 모든 팀의 categoryMaster에 추가
+      newOrganization.departments.forEach((dept: Department) => {
+        dept.teams.forEach((team: Team) => {
+          if (!team.categoryMaster[category1]) {
+            team.categoryMaster[category1] = {};
+          }
+          if (!team.categoryMaster[category1][category2]) {
+            team.categoryMaster[category1][category2] = [];
+          }
+          if (!team.categoryMaster[category1][category2].includes(category3)) {
+            team.categoryMaster[category1][category2].push(category3);
+          }
+        });
+      });
+      
+      return {
+        ...prevData,
+        organization: newOrganization
+      };
+    });
   };
   
 
@@ -3008,85 +4629,157 @@ const App = () => {
         let updateCount = 0;
         let skipCount = 0;
 
-        // 빠른 검색을 위한 Map (TaskCode -> Index)
-        const taskMap = new Map(updatedTaskList.map((t, index) => [t.taskCode, index]));
+        // 빠른 검색을 위한 Map들
+        const taskMapByCode = new Map<string, number[]>(); // TaskCode -> [Index들] (같은 Task 2는 여러 개일 수 있음)
+        const taskMapByName = new Map<string, number[]>(); // Task 2(name) -> [Index들]
+        
+        // 기존 Task들을 맵에 등록
+        updatedTaskList.forEach((t, index) => {
+          // Task Code로 인덱스 추가
+          if (t.taskCode) {
+            if (!taskMapByCode.has(t.taskCode)) {
+              taskMapByCode.set(t.taskCode, []);
+            }
+            taskMapByCode.get(t.taskCode)!.push(index);
+          }
+          
+          // Task 2(name)로 인덱스 추가
+          if (t.name) {
+            if (!taskMapByName.has(t.name)) {
+              taskMapByName.set(t.name, []);
+            }
+            taskMapByName.get(t.name)!.push(index);
+          }
+        });
+        
         // 이번 배치에서 생성된 신규 코드 중복 방지용 Set
         const newCodesInBatch = new Set<string>();
 
         rows.forEach((row, idx) => {
-          // [중요] 컬럼 인덱스 변경 반영 (중요도 삭제됨)
-          // Index 4: 담당자, Index 7: Task명
+          // [중요] 컬럼 인덱스 변경 반영 (이미지 기준)
+          // Index 4: 담당자, Index 12: Task 2
           const rawAssignee = row[4];
-          const rawTaskName = row[7];
+          const rawTaskName = row[12];
 
           // 필수값 체크: 담당자와 Task명이 없으면 건너뜀
           if (!rawAssignee || !rawTaskName) {
-            console.warn(`Row ${idx + 5}: 담당자(${rawAssignee}) 또는 Task2(${rawTaskName}) 누락으로 스킵됨.`);
+            console.warn(`Row ${idx + 5}: 담당자(${rawAssignee}) 또는 Task 2(${rawTaskName}) 누락으로 스킵됨.`);
             skipCount++;
             return;
           }
 
-          const inputTaskCode = row[5] ? String(row[5]).trim() : '';
+          const inputTaskCode = row[11] ? String(row[11]).trim() : '';
           const taskName = String(rawTaskName).trim();
           const assigneeName = String(rawAssignee).trim();
 
-          // 공통 파싱 데이터 (인덱스 -1칸씩 당겨짐)
-          const planStart = row[14] ? String(row[14]).trim() : todayStr;
-          const planEnd = row[15] ? String(row[15]).trim() : todayStr;
-          const actualStart = row[16] ? String(row[16]).trim() : null;
-          const actualEnd = row[17] ? String(row[17]).trim() : null;
-          const planMH = row[18] ? Number(row[18]) : 0;
-          const actualMH = row[19] ? Number(row[19]) : 0;
+          // 공통 파싱 데이터 (이미지 기준 인덱스)
+          const planStart = row[13] ? String(row[13]).trim() : todayStr;
+          const planEnd = row[14] ? String(row[14]).trim() : todayStr;
+          const actualStart = row[15] ? String(row[15]).trim() : null;
+          const actualEnd = row[16] ? String(row[16]).trim() : null;
+          const planMH = row[17] ? normalizeHHMM(String(row[17]).trim()) : '00.00';
+          const actualMH = row[18] ? normalizeHHMM(String(row[18]).trim()) : '00.00';
           
-          let statusText = row[21] ? String(row[21]).trim() : '';
+          let statusText = row[20] ? String(row[20]).trim() : '';
           let newStatus: TaskStatus | null = null;
           if (statusText === '완료') newStatus = 'completed';
           else if (statusText === '진행중') newStatus = 'in-progress';
           else if (statusText === '지연') newStatus = 'delayed';
           else if (statusText === '미시작') newStatus = 'not-started';
 
-          const issueText = row[22] ? String(row[22]).trim() : '';
+          const issueText = row[21] ? String(row[21]).trim() : '';
 
           // ---------------------------------------------------------
-          // [CASE 1] 기존 Task 업데이트 (Task Code가 시스템에 존재)
+          // [CASE 1] Task Code가 제공된 경우: 해당 Task Code를 가진 모든 Task 업데이트
           // ---------------------------------------------------------
-          if (inputTaskCode && taskMap.has(inputTaskCode)) {
-            const targetIndex = taskMap.get(inputTaskCode)!;
-            const targetTask = updatedTaskList[targetIndex];
-
-            // 실적 데이터 업데이트
-            const updatedActual = { ...targetTask.actual };
-            if (actualStart) updatedActual.startDate = actualStart;
-            if (actualEnd) updatedActual.endDate = actualEnd;
-            if (row[19] !== undefined) updatedActual.hours = actualMH;
-
-            // 이슈 추가 (덮어쓰지 않고 추가)
-            let updatedIssues = [...targetTask.monthlyIssues];
-            if (issueText) {
-              updatedIssues.push({
-                date: todayStr,
-                issue: `[Excel] ${issueText}`,
-                reviewed: false,
-                replies: []
-              });
-            }
-
-            // Task 업데이트 적용
-            updatedTaskList[targetIndex] = {
-              ...targetTask,
-              actual: updatedActual,
-              status: newStatus || targetTask.status,
-              monthlyIssues: updatedIssues
-            };
+          if (inputTaskCode && taskMapByCode.has(inputTaskCode)) {
+            const targetIndices = taskMapByCode.get(inputTaskCode)!;
             
-            updateCount++;
+            // 같은 Task Code를 가진 모든 Task들의 실적 업데이트
+            targetIndices.forEach(targetIndex => {
+              const targetTask = updatedTaskList[targetIndex];
+              
+              // 실적 데이터 업데이트
+              const updatedActual = { ...targetTask.actual };
+              if (actualStart) updatedActual.startDate = actualStart;
+              if (actualEnd) updatedActual.endDate = actualEnd;
+              if (row[18] !== undefined && actualMH !== '00.00') updatedActual.hours = actualMH;
+
+              // 이슈 추가 (덮어쓰지 않고 추가)
+              let updatedIssues = [...targetTask.monthlyIssues];
+              if (issueText) {
+                updatedIssues.push({
+                  date: todayStr,
+                  issue: `[Excel] ${issueText}`,
+                  reviewed: false,
+                  replies: []
+                });
+              }
+
+              // Task 업데이트 적용
+              updatedTaskList[targetIndex] = {
+                ...targetTask,
+                actual: updatedActual,
+                status: newStatus || targetTask.status,
+                monthlyIssues: updatedIssues
+              };
+            });
+            
+            updateCount += targetIndices.length;
+          }
+          // ---------------------------------------------------------
+          // [CASE 1-2] Task Code가 없지만 같은 Task 2(name)를 가진 Task가 있는 경우: 해당 Task Code 공유
+          // ---------------------------------------------------------
+          else if (!inputTaskCode && taskMapByName.has(taskName)) {
+            const targetIndices = taskMapByName.get(taskName)!;
+            const existingTask = updatedTaskList[targetIndices[0]];
+            const sharedTaskCode = existingTask.taskCode;
+            
+            // 같은 Task 2를 가진 모든 Task들의 실적 업데이트
+            targetIndices.forEach(targetIndex => {
+              const targetTask = updatedTaskList[targetIndex];
+              
+              // 실적 데이터 업데이트
+              const updatedActual = { ...targetTask.actual };
+              if (actualStart) updatedActual.startDate = actualStart;
+              if (actualEnd) updatedActual.endDate = actualEnd;
+              if (row[18] !== undefined && actualMH !== '00.00') updatedActual.hours = actualMH;
+
+              // 이슈 추가 (덮어쓰지 않고 추가)
+              let updatedIssues = [...targetTask.monthlyIssues];
+              if (issueText) {
+                updatedIssues.push({
+                  date: todayStr,
+                  issue: `[Excel] ${issueText}`,
+                  reviewed: false,
+                  replies: []
+                });
+              }
+
+              // Task 업데이트 적용
+              updatedTaskList[targetIndex] = {
+                ...targetTask,
+                actual: updatedActual,
+                status: newStatus || targetTask.status,
+                monthlyIssues: updatedIssues
+              };
+            });
+            
+            updateCount += targetIndices.length;
           } 
           // ---------------------------------------------------------
           // [CASE 2] 신규 Task 생성
           // ---------------------------------------------------------
           else {
-            // Task Code 자동 채번
+            // Task Code 결정: Task 2(name)마다 공유
             let finalTaskCode = inputTaskCode;
+            
+            // Task Code가 없으면 같은 Task 2(name)를 가진 기존 Task의 Task Code 사용
+            if (!finalTaskCode && taskMapByName.has(taskName)) {
+              const existingTaskIndices = taskMapByName.get(taskName)!;
+              const existingTask = updatedTaskList[existingTaskIndices[0]];
+              finalTaskCode = existingTask.taskCode;
+            }
             
             // 코드가 없거나, 이미 이번 배치에서 사용된 코드라면 새로 생성
             if (!finalTaskCode || newCodesInBatch.has(finalTaskCode)) {
@@ -3094,7 +4787,7 @@ const App = () => {
                 let suffix = 0;
                 let tempCode = baseCode;
                 // 전체 데이터 + 현재 배치 내 중복 체크
-                while (taskMap.has(tempCode) || newCodesInBatch.has(tempCode)) {
+                while (taskMapByCode.has(tempCode) || newCodesInBatch.has(tempCode)) {
                   suffix++;
                   tempCode = `${baseCode}_${suffix}`;
                 }
@@ -3122,9 +4815,9 @@ const App = () => {
             const newTask: Task = {
               id: `upload_${Date.now()}_${idx}`,
               taskCode: finalTaskCode,
-              category1: row[9] || '',   // 인덱스 확인
-              category2: row[11] || '',
-              category3: row[13] || '',
+              category1: row[6] || '',   // *업무구분 Lv.1
+              category2: row[8] || '',   // *업무구분 Lv.2
+              category3: row[10] || '',  // Task Lv.1
               name: taskName,
               department: foundMember ? foundMember.department : (row[1] || '미지정'),
               team: foundMember ? foundMember.team : (row[2] || '미지정'),
@@ -3144,8 +4837,20 @@ const App = () => {
               isActive: true
             };
 
+            const newTaskIndex = updatedTaskList.length;
             updatedTaskList.push(newTask);
-            taskMap.set(finalTaskCode, updatedTaskList.length - 1); // 맵에 즉시 반영
+            
+            // 맵에 즉시 반영 (Task Code와 Task 2(name) 모두)
+            if (!taskMapByCode.has(finalTaskCode)) {
+              taskMapByCode.set(finalTaskCode, []);
+            }
+            taskMapByCode.get(finalTaskCode)!.push(newTaskIndex);
+            
+            if (!taskMapByName.has(taskName)) {
+              taskMapByName.set(taskName, []);
+            }
+            taskMapByName.get(taskName)!.push(newTaskIndex);
+            
             createCount++;
           }
         });
@@ -3222,8 +4927,10 @@ const App = () => {
     // 2. 데이터 변환 (Task 객체 -> 엑셀 행 배열)
     const taskRows = sortedAndFilteredTasks.map(t => {
       const currentPlan = getCurrentPlan(t);
-      const progress = currentPlan.hours > 0 
-        ? Math.round((t.actual.hours / currentPlan.hours) * 100) 
+      const planHours = hhmmToNumber(currentPlan.hours);
+      const actualHours = hhmmToNumber(t.actual.hours);
+      const progress = planHours > 0 
+        ? Math.round((actualHours / planHours) * 100) 
         : 0;
       
       // 이슈 텍스트 합치기 (최신순)
@@ -3237,26 +4944,24 @@ const App = () => {
         t.team,                         // C: *팀
         t.group,                        // D: *그룹
         t.assigneeName,                 // E: *담당자
-        t.taskCode,                     // F: Task Code
-        "",                             // G: Category Code (Hidden - 필요시 로직 추가)
-        "중",                           // H: *중요도 (기본값)
-        t.name,                         // I: *Task명
-        "",                             // J: Lv.1 code (Hidden)
-        t.category1,                    // K: *세부계획 Lv.1
-        "",                             // L: Lv.2 code (Hidden)
-        t.category2,                    // M: *세부계획 Lv.2
-        "",                             // N: Lv.3 code (Hidden)
-        t.category3,                    // O: *세부계획 Lv.3
-        currentPlan.startDate || "",    // P: *계획(시작일)
-        currentPlan.endDate || "",      // Q: *계획(종료일)
-        t.actual.startDate || "",       // R: 실적(시작일)
-        t.actual.endDate || "",         // S: 실적(종료일)
-        currentPlan.hours,              // T: *계획MH
-        t.actual.hours,                 // U: 실적MH
-        `${progress}%`,                 // V: 진척률
-        statusMap[t.status] || t.status,// W: 진행상태
-        issueText,                      // X: 이슈 및 해결방안
-        ""                              // Y: 관리자 검토의견
+        "",                             // F: 업무구분 Lv.1 code (현재 데이터 없음)
+        t.category1,                    // G: *업무구분 Lv.1
+        "",                             // H: 업무구분 Lv.2 code (현재 데이터 없음)
+        t.category2,                    // I: *업무구분 Lv.2
+        "",                             // J: Task Lv.1 Code (현재 데이터 없음)
+        t.category3,                    // K: Task Lv.1 (업무구분 Lv.3)
+        t.taskCode,                     // L: Task Code
+        t.name,                         // M: *Task 2
+        currentPlan.startDate || "",    // N: *계획(시작일)
+        currentPlan.endDate || "",      // O: *계획(종료일)
+        t.actual.startDate || "",       // P: 실적(시작일)
+        t.actual.endDate || "",         // Q: 실적(종료일)
+        currentPlan.hours,              // R: *계획MH
+        t.actual.hours,                 // S: 실적MH
+        `${progress}%`,                 // T: 진척률
+        statusMap[t.status] || t.status,// U: 진행상태
+        issueText,                      // V: 이슈 및 해결방안
+        ""                              // W: 관리자 검토의견
       ];
     });
 
@@ -3268,33 +4973,31 @@ const App = () => {
       ["'*' 표시는 필수 관리 항목입니다."],
       // Row 3: 공백
       [],
-      // Row 4: 헤더 (템플릿과 동일)
+      // Row 4: 헤더 (이미지 기준으로 변경)
       [
         "Task ID",             // A (Hidden)
         "*실",                 // B
         "*팀",                 // C
         "*그룹",               // D
         "*담당자",             // E
-        "Task Code",           // F
-        "Category Code",       // G (Hidden)
-        "*중요도",             // H
-        "*Task명",             // I
-        "세부계획 Lv.1 code",  // J (Hidden)
-        "*세부계획 Lv.1",      // K
-        "세부계획 Lv.2 code",  // L (Hidden)
-        "*세부계획 Lv.2",      // M
-        "세부계획 Lv.3 code",  // N (Hidden)
-        "*세부계획 Lv.3",      // O
-        "*계획(시작일)",       // P
-        "*계획(종료일)",       // Q
-        "실적(시작일)",        // R
-        "실적(종료일)",        // S
-        "*계획MH",             // T
-        "실적MH",              // U
-        "진척률",              // V
-        "진행상태",            // W
-        "이슈 및 해결방안",    // X
-        "관리자 검토의견"      // Y
+        "업무구분 Lv.1 code",  // F
+        "*업무구분 Lv.1",      // G
+        "업무구분 Lv.2 code",  // H
+        "*업무구분 Lv.2",      // I
+        "Task Lv.1 Code",      // J
+        "Task Lv.1",           // K
+        "Task Code",           // L
+        "*Task 2",             // M
+        "*계획(시작일)",       // N
+        "*계획(종료일)",       // O
+        "실적(시작일)",        // P
+        "실적(종료일)",        // Q
+        "*계획MH\n(hh.mm, mm:00~60)",             // R
+        "실적MH\n(hh.mm, mm:00~60)",              // S
+        "진척률",              // T
+        "진행상태",            // U
+        "이슈 및 해결방안",    // V
+        "관리자 검토의견"      // W
       ],
       // Row 5~: 실제 데이터
       ...taskRows
@@ -3303,49 +5006,64 @@ const App = () => {
     // 4. 시트 생성
     const ws = XLSX.utils.aoa_to_sheet(wsData);
 
-    // 5. 컬럼 스타일 설정 (너비 및 숨김 - 템플릿과 동일)
+    // 5. 컬럼 스타일 설정 (너비 및 숨김 - 이미지 기준으로 변경 반영)
     ws['!cols'] = [
       { wch: 20, hidden: true }, // A: Task ID (숨김)
-      { wch: 10 },               // B
-      { wch: 10 },               // C
-      { wch: 15 },               // D
-      { wch: 10 },               // E
-      { wch: 20 },               // F
-      { wch: 15, hidden: true }, // G: Cat Code (숨김)
-      { wch: 8 },                // H
-      { wch: 35 },               // I
-      { wch: 10, hidden: true }, // J: Lv1 Code (숨김)
-      { wch: 15 },               // K
-      { wch: 10, hidden: true }, // L: Lv2 Code (숨김)
-      { wch: 15 },               // M
-      { wch: 10, hidden: true }, // N: Lv3 Code (숨김)
-      { wch: 15 },               // O
-      { wch: 12 },               // P
-      { wch: 12 },               // Q
-      { wch: 12 },               // R
-      { wch: 12 },               // S
-      { wch: 8 },                // T
-      { wch: 8 },                // U
-      { wch: 8 },                // V
-      { wch: 10 },               // W
-      { wch: 40 },               // X (이슈는 내용이 많으므로 넓게)
-      { wch: 25 }                // Y
+      { wch: 10 },               // B: *실
+      { wch: 10 },               // C: *팀
+      { wch: 15 },               // D: *그룹
+      { wch: 10 },               // E: *담당자
+      { wch: 15 },               // F: 업무구분 Lv.1 code
+      { wch: 15 },               // G: *업무구분 Lv.1
+      { wch: 15 },               // H: 업무구분 Lv.2 code
+      { wch: 15 },               // I: *업무구분 Lv.2
+      { wch: 15 },               // J: Task Lv.1 Code
+      { wch: 15 },               // K: Task Lv.1
+      { wch: 20 },               // L: Task Code
+      { wch: 35 },               // M: *Task 2
+      { wch: 12 },               // N: *계획(시작일)
+      { wch: 12 },               // O: *계획(종료일)
+      { wch: 12 },               // P: 실적(시작일)
+      { wch: 12 },               // Q: 실적(종료일)
+      { wch: 15 },               // R: *계획MH (hh.mm 형식 안내 포함)
+      { wch: 15 },               // S: 실적MH (hh.mm 형식 안내 포함)
+      { wch: 8 },                // T: 진척률
+      { wch: 10 },               // U: 진행상태
+      { wch: 30 },               // V: 이슈 및 해결방안
+      { wch: 20 }                // W: 관리자 검토의견
     ];
 
-    // 6. 셀 병합 (상단 타이틀)
+    // 7. 셀 병합 (상단 타이틀) - 컬럼 구조 변경으로 인덱스 조정 (A~W = 23개 컬럼, 인덱스 0~22)
     ws['!merges'] = [
-      { s: { r: 0, c: 0 }, e: { r: 0, c: 24 } }, 
-      { s: { r: 1, c: 0 }, e: { r: 1, c: 24 } }
+      { s: { r: 0, c: 0 }, e: { r: 0, c: 22 } }, 
+      { s: { r: 1, c: 0 }, e: { r: 1, c: 22 } }
     ];
 
-    // 7. 파일 저장
+    // 8. 파일 저장
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Tasks_Export");
     const todayStr = new Date().toISOString().split('T')[0];
     XLSX.writeFile(wb, `tasks_export_${todayStr}.xlsx`);
   };
 
-  const ThSortable = ({ title, sortKey }: { title: string; sortKey: SortKey; }) => { const sortIndex = sortConfig.findIndex(c => c.key === sortKey); const direction = sortIndex !== -1 ? sortConfig[sortIndex].direction : null; return (<th onClick={() => setSortConfig(prev => { const existingIndex = prev.findIndex(c => c.key === sortKey); let newConfig = [...prev]; if (existingIndex > -1) { if (newConfig[existingIndex].direction === 'asc') newConfig[existingIndex].direction = 'desc'; else newConfig.splice(existingIndex, 1); } else { newConfig.push({ key: sortKey, direction: 'asc' }); if (newConfig.length > 3) newConfig.shift(); } return newConfig; })}> {title} {direction && (<> <span className="sort-indicator">{direction === 'asc' ? '▲' : '▼'}</span> {sortConfig.length > 1 && <span className="sort-priority">{sortIndex + 1}</span>} </>)} </th>); };
+  const ThSortable = ({ title, sortKey, resizingIndex, columnIndex, onMouseDown, hoveredResizeIndex, onResizeHover }: { title: string | React.ReactNode; sortKey: SortKey; resizingIndex?: number | null; columnIndex?: number; onMouseDown?: (e: React.MouseEvent, index: number) => void; hoveredResizeIndex?: number | null; onResizeHover?: (index: number | null) => void }) => { const sortIndex = sortConfig.findIndex(c => c.key === sortKey); const direction = sortIndex !== -1 ? sortConfig[sortIndex].direction : null; return (<th style={{ position: 'relative', userSelect: 'none' }} onClick={() => setSortConfig(prev => { const existingIndex = prev.findIndex(c => c.key === sortKey); let newConfig = [...prev]; if (existingIndex > -1) { if (newConfig[existingIndex].direction === 'asc') newConfig[existingIndex].direction = 'desc'; else newConfig.splice(existingIndex, 1); } else { newConfig.push({ key: sortKey, direction: 'asc' }); if (newConfig.length > 3) newConfig.shift(); } return newConfig; })}> {title} {direction && (<> <span className="sort-indicator">{direction === 'asc' ? '▲' : '▼'}</span> {sortConfig.length > 1 && <span className="sort-priority">{sortIndex + 1}</span>} </>)} {columnIndex !== undefined && onMouseDown && (
+                    <div 
+                      style={{
+                        position: 'absolute',
+                        right: '-2px',
+                        top: 0,
+                        bottom: 0,
+                        width: '6px',
+                        cursor: 'col-resize',
+                        backgroundColor: resizingIndex === columnIndex ? '#007bff' : (hoveredResizeIndex === columnIndex ? '#dee2e6' : 'transparent'),
+                        zIndex: 10,
+                        transition: 'background-color 0.2s'
+                      }}
+                      onMouseDown={(e) => onMouseDown(e, columnIndex)}
+                      onMouseEnter={() => onResizeHover && onResizeHover(columnIndex)}
+                      onMouseLeave={() => onResizeHover && onResizeHover(null)}
+                    />
+                  )} </th>); };
 
 const ViewControls = () => {
     // [수정] 모바일 토글 상태 제거 (항상 펼침) - CSS로 제어
@@ -3461,6 +5179,94 @@ const ViewControls = () => {
   };
 
   const TaskListView = () => {
+    const [columnWidths, setColumnWidths] = useState<number[]>([5, 8, 12, 10, 10, 10, 15, 10, 12, 12, 8, 8, 5]);
+    const [resizingIndex, setResizingIndex] = useState<number | null>(null);
+    const [hoveredResizeIndex, setHoveredResizeIndex] = useState<number | null>(null);
+    const resizeStartRef = useRef<{ x: number; widths: number[] } | null>(null);
+
+    const handleMouseDown = (e: React.MouseEvent, index: number) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const tableElement = document.querySelector('.table-responsive table');
+      if (!tableElement) return;
+      
+      setResizingIndex(index);
+      resizeStartRef.current = {
+        x: e.clientX,
+        widths: [...columnWidths]
+      };
+      
+      // 전체 페이지에 리사이즈 커서 적용
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+    };
+
+    const handleMouseMove = useCallback((e: MouseEvent) => {
+      if (resizingIndex === null || !resizeStartRef.current) return;
+      
+      const deltaX = e.clientX - resizeStartRef.current.x;
+      const tableElement = document.querySelector('.table-responsive table');
+      if (!tableElement) return;
+      
+      const tableWidth = tableElement.clientWidth;
+      if (tableWidth === 0) return; // 테이블 너비가 0이면 리턴
+      
+      const deltaPercent = (deltaX / tableWidth) * 100;
+      
+      setColumnWidths(prev => {
+        if (!resizeStartRef.current) return prev;
+        
+        const newWidths = [...prev];
+        const startWidths = resizeStartRef.current.widths;
+        
+        // 인덱스 범위 체크
+        if (resizingIndex < 0 || resizingIndex >= newWidths.length || resizingIndex >= startWidths.length) {
+          return prev;
+        }
+        
+        const startWidth = startWidths[resizingIndex];
+        const newWidth = Math.max(3, Math.min(30, startWidth + deltaPercent));
+        const widthDiff = newWidth - startWidth;
+        newWidths[resizingIndex] = newWidth;
+        
+        // 다음 열 너비 조정 (전체 합이 100%가 되도록)
+        if (resizingIndex < newWidths.length - 1) {
+          const nextIndex = resizingIndex + 1;
+          if (nextIndex < startWidths.length) {
+            const nextStartWidth = startWidths[nextIndex];
+            const nextWidth = Math.max(3, nextStartWidth - widthDiff);
+            newWidths[nextIndex] = nextWidth;
+          }
+        }
+        
+        return newWidths;
+      });
+    }, [resizingIndex]);
+
+    const handleMouseUp = useCallback(() => {
+      if (resizingIndex !== null) {
+        setResizingIndex(null);
+        resizeStartRef.current = null;
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+      }
+    }, [resizingIndex]);
+
+    useEffect(() => {
+      if (resizingIndex !== null) {
+        document.addEventListener('mousemove', handleMouseMove);
+        document.addEventListener('mouseup', handleMouseUp);
+        document.addEventListener('mouseleave', handleMouseUp); // 마우스가 화면 밖으로 나갈 때도 처리
+        return () => {
+          document.removeEventListener('mousemove', handleMouseMove);
+          document.removeEventListener('mouseup', handleMouseUp);
+          document.removeEventListener('mouseleave', handleMouseUp);
+          document.body.style.cursor = '';
+          document.body.style.userSelect = '';
+        };
+      }
+    }, [resizingIndex, handleMouseMove, handleMouseUp]);
+
     return (
       <> 
         {drillDownIds && (<div className="drilldown-banner"> <span>🔍 대시보드에서 선택된 <strong>{drillDownIds.size}</strong>개의 Task를 조회 중입니다.</span> <button className="btn btn-sm btn-secondary" onClick={() => setDrillDownIds(null)}>전체 목록 보기</button> </div>)} 
@@ -3481,17 +5287,73 @@ const ViewControls = () => {
                   </div>
                 </>
               )} 
-              <div style={{ marginLeft: 'auto', display: 'flex', gap: '8px' }}> <button className="btn btn-primary" onClick={() => setDailyModalOpen(true)}>⏱️ 시수 입력</button> <button className="btn btn-secondary" onClick={handleExport}>📥 내보내기</button> </div>
+              <div style={{ marginLeft: 'auto', display: 'flex', gap: '8px' }}> <button className="btn btn-primary" onClick={() => setDailyModalOpen(true)}>⏱️ 시수 입력</button> <button className="btn btn-secondary" onClick={handleExport}>📥 내보내기</button> <button className="btn btn-success" onClick={() => setUploadModalOpen(true)}>➕ Task 등록</button> </div>
             </div> 
           </div> 
           <div className="table-responsive">
             <table> 
-              <colgroup> <col style={{ width: '10%' }} /> <col style={{ width: '12%' }} /> <col style={{ width: '20%' }} /> <col style={{ width: '8%' }} /> <col style={{ width: '10%' }} /> <col style={{ width: '10%' }} /> <col style={{ width: '10%' }} /> <col style={{ width: '8%' }} /> <col style={{ width: '5%' }} /> <col style={{ width: '7%' }} /> </colgroup> 
+              <colgroup> 
+                {columnWidths.map((width, idx) => (
+                  <col key={idx} style={{ width: `${width}%` }} />
+                ))}
+              </colgroup> 
               <thead className="sticky-thead">
-                <tr> <ThSortable title="Task Code" sortKey="taskCode" /> <ThSortable title="카테고리" sortKey="category" /> <ThSortable title="Task명" sortKey="name" /> <ThSortable title="담당자" sortKey="assigneeName" /> <ThSortable title="소속" sortKey="affiliation" /> <ThSortable title="계획" sortKey="planned" /> <ThSortable title="실적" sortKey="actual" /> <ThSortable title="상태" sortKey="status" /> <ThSortable title="이슈" sortKey="issues" /> <th>관리</th> </tr>
+                <tr> 
+                  <th style={{ position: 'relative', userSelect: 'none' }}>
+                    관리
+                    <div 
+                      style={{
+                        position: 'absolute',
+                        right: '-2px',
+                        top: 0,
+                        bottom: 0,
+                        width: '6px',
+                        cursor: 'col-resize',
+                        backgroundColor: resizingIndex === 0 ? '#007bff' : (hoveredResizeIndex === 0 ? '#dee2e6' : 'transparent'),
+                        zIndex: 10,
+                        transition: 'background-color 0.2s'
+                      }}
+                      onMouseDown={(e) => handleMouseDown(e, 0)}
+                      onMouseEnter={() => setHoveredResizeIndex(0)}
+                      onMouseLeave={() => setHoveredResizeIndex(null)}
+                    />
+                  </th>
+                  <th style={{ position: 'relative', userSelect: 'none' }}>
+                    이슈 관리
+                    <div 
+                      style={{
+                        position: 'absolute',
+                        right: '-2px',
+                        top: 0,
+                        bottom: 0,
+                        width: '6px',
+                        cursor: 'col-resize',
+                        backgroundColor: resizingIndex === 1 ? '#007bff' : (hoveredResizeIndex === 1 ? '#dee2e6' : 'transparent'),
+                        zIndex: 10,
+                        transition: 'background-color 0.2s'
+                      }}
+                      onMouseDown={(e) => handleMouseDown(e, 1)}
+                      onMouseEnter={() => setHoveredResizeIndex(1)}
+                      onMouseLeave={() => setHoveredResizeIndex(null)}
+                    />
+                  </th>
+                  <ThSortable title="Task Code" sortKey="taskCode" resizingIndex={resizingIndex} columnIndex={2} onMouseDown={handleMouseDown} hoveredResizeIndex={hoveredResizeIndex} onResizeHover={setHoveredResizeIndex} /> 
+                  <ThSortable title={<><span>*업무 구분</span><br /><span>Lv.1</span></>} sortKey="category" resizingIndex={resizingIndex} columnIndex={3} onMouseDown={handleMouseDown} hoveredResizeIndex={hoveredResizeIndex} onResizeHover={setHoveredResizeIndex} /> 
+                  <ThSortable title={<><span>*업무 구분</span><br /><span>Lv.2</span></>} sortKey="category" resizingIndex={resizingIndex} columnIndex={4} onMouseDown={handleMouseDown} hoveredResizeIndex={hoveredResizeIndex} onResizeHover={setHoveredResizeIndex} />
+                  <ThSortable title="*Task 1" sortKey="category" resizingIndex={resizingIndex} columnIndex={5} onMouseDown={handleMouseDown} hoveredResizeIndex={hoveredResizeIndex} onResizeHover={setHoveredResizeIndex} />
+                  <ThSortable title="*Task 2" sortKey="name" resizingIndex={resizingIndex} columnIndex={6} onMouseDown={handleMouseDown} hoveredResizeIndex={hoveredResizeIndex} onResizeHover={setHoveredResizeIndex} /> 
+                  <ThSortable title="*담당자" sortKey="assigneeName" resizingIndex={resizingIndex} columnIndex={7} onMouseDown={handleMouseDown} hoveredResizeIndex={hoveredResizeIndex} onResizeHover={setHoveredResizeIndex} /> 
+                  <ThSortable title="*계획" sortKey="planned" resizingIndex={resizingIndex} columnIndex={8} onMouseDown={handleMouseDown} hoveredResizeIndex={hoveredResizeIndex} onResizeHover={setHoveredResizeIndex} /> 
+                  <ThSortable title="실적" sortKey="actual" resizingIndex={resizingIndex} columnIndex={9} onMouseDown={handleMouseDown} hoveredResizeIndex={hoveredResizeIndex} onResizeHover={setHoveredResizeIndex} /> 
+                  <ThSortable title="진척률" sortKey="status" resizingIndex={resizingIndex} columnIndex={10} onMouseDown={handleMouseDown} hoveredResizeIndex={hoveredResizeIndex} onResizeHover={setHoveredResizeIndex} /> 
+                  <ThSortable title="진행상태" sortKey="status" resizingIndex={resizingIndex} columnIndex={11} onMouseDown={handleMouseDown} hoveredResizeIndex={hoveredResizeIndex} onResizeHover={setHoveredResizeIndex} />
+                  <th style={{ position: 'relative', userSelect: 'none' }}>
+                    비활성화
+                  </th>
+                </tr>
               </thead> 
               <tbody> 
-                {sortedAndFilteredTasks.length === 0 ? ( <tr><td colSpan={10} className="table-empty-state"><div className="empty-state-content"><span>📭</span><p>표시할 Task가 없습니다.</p><small>필터를 조정하거나 새로운 Task를 추가해주세요.</small></div></td></tr> ) : ( sortedAndFilteredTasks.map(task => <TaskRow key={task.id} task={task} onEdit={handleEdit} onOpenIssueModal={() => { setSelectedTaskForIssues(task); setIssueModalOpen(true); }} onToggleActive={handleToggleActive} /> ) )} 
+                {sortedAndFilteredTasks.length === 0 ? ( <tr><td colSpan={13} className="table-empty-state"><div className="empty-state-content"><span>📭</span><p>표시할 Task가 없습니다.</p><small>필터를 조정하거나 새로운 Task를 추가해주세요.</small></div></td></tr> ) : ( sortedAndFilteredTasks.map(task => <TaskRow key={task.id} task={task} onEdit={handleEdit} onOpenIssueModal={() => { setSelectedTaskForIssues(task); setIssueModalOpen(true); }} onToggleActive={handleToggleActive} onOpenRevisionModal={(task) => { setSelectedTaskForRevision(task); setRevisionModalOpen(true); }} /> ) )} 
               </tbody> 
             </table> 
           </div>
@@ -3509,8 +5371,33 @@ const CalendarView = ({ tasks, currentDate, setCurrentDate, onTaskClick, onDrill
   // 2. 숨김 목록 팝업 표시 여부
   const [showHiddenList, setShowHiddenList] = useState(false);
   
+  // 팝업 외부 클릭 감지를 위한 ref
+  const hiddenListRef = useRef<HTMLDivElement>(null);
+  const hiddenListButtonRef = useRef<HTMLButtonElement>(null);
+  
   // 기존 viewMode state 유지
   const [viewMode, setViewMode] = useState<'active' | 'all'>('active');
+  
+  // 외부 클릭 감지: 팝업이 열려있을 때 외부 클릭 시 닫기
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (showHiddenList && 
+          hiddenListRef.current && 
+          hiddenListButtonRef.current &&
+          !hiddenListRef.current.contains(event.target as Node) &&
+          !hiddenListButtonRef.current.contains(event.target as Node)) {
+        setShowHiddenList(false);
+      }
+    };
+
+    if (showHiddenList) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [showHiddenList]);
 
   // 3. 숨김 해제(복구) 함수
   const handleRestore = (idToRestore: string) => {
@@ -3532,7 +5419,7 @@ const CalendarView = ({ tasks, currentDate, setCurrentDate, onTaskClick, onDrill
     const totalCapacity = workingDays * 8; 
     let regularActual = 0; let holidayActual = 0; 
     const monthPrefix = `${year}-${String(month + 1).padStart(2, '0')}`;
-    tasks.forEach(task => { if (task.dailyLogs) { Object.entries(task.dailyLogs).forEach(([dateStr, hours]) => { if (dateStr.startsWith(monthPrefix)) { const logDate = new Date(dateStr); const dayOfWeek = logDate.getDay(); if (dayOfWeek === 0 || dayOfWeek === 6 || koreanHolidays.has(dateStr)) holidayActual += hours; else regularActual += hours; } }); } });
+    tasks.forEach(task => { if (task.dailyLogs) { Object.entries(task.dailyLogs).forEach(([dateStr, hours]) => { if (dateStr.startsWith(monthPrefix)) { const logDate = new Date(dateStr); const dayOfWeek = logDate.getDay(); const hoursNum = hhmmToNumber(hours); if (dayOfWeek === 0 || dayOfWeek === 6 || koreanHolidays.has(dateStr)) holidayActual += hoursNum; else regularActual += hoursNum; } }); } });
     return { totalCapacity, regularActual, holidayActual, totalActual: regularActual + holidayActual };
   }, [currentDate, tasks]);
 
@@ -3606,6 +5493,7 @@ const CalendarView = ({ tasks, currentDate, setCurrentDate, onTaskClick, onDrill
            
            {/* (A) 숨김 목록 토글 버튼 */}
            <button 
+             ref={hiddenListButtonRef}
              onClick={() => setShowHiddenList(!showHiddenList)}
              style={{ 
                background: showHiddenList ? '#ffebee' : 'white', 
@@ -3620,7 +5508,7 @@ const CalendarView = ({ tasks, currentDate, setCurrentDate, onTaskClick, onDrill
                boxShadow: '0 2px 4px rgba(0,0,0,0.05)'
              }}
            >
-               <span>👁️ 숨긴 과제</span>
+               <span>👁️ 전체 일정</span>
                {hiddenTaskIds.length > 0 && (
                  <span style={{ background: '#d32f2f', color: 'white', borderRadius: '10px', padding: '0 6px', fontSize: '0.75rem' }}>
                    {hiddenTaskIds.length}
@@ -3638,12 +5526,12 @@ const CalendarView = ({ tasks, currentDate, setCurrentDate, onTaskClick, onDrill
                boxShadow: '0 2px 4px rgba(0,0,0,0.05)'
              }}
            >
-               {viewMode === 'all' ? '▽ 전체 일정' : '△ 활성 일정'}
+               {viewMode === 'all' ? '▽ 최소화 일정' : '△ 활성 일정'}
            </button>
 
            {/* (C) 숨김 목록 팝업 */}
            {showHiddenList && (
-             <div style={{
+             <div ref={hiddenListRef} style={{
                position: 'absolute', top: '100%', right: '110px', // 버튼들 위치 고려
                width: '300px', background: 'white', border: '1px solid #ddd',
                boxShadow: '0 4px 12px rgba(0,0,0,0.15)', borderRadius: '8px', zIndex: 2000,
@@ -3738,7 +5626,7 @@ const CalendarView = ({ tasks, currentDate, setCurrentDate, onTaskClick, onDrill
                   })} 
                   {hiddenCount > 0 && (
                     <div className="more-tasks-indicator" onClick={(e) => { e.stopPropagation(); handleGoToList(e, tasksForDay); }}>
-                      + {hiddenCount} more
+                      Task 상세
                     </div>
                   )}
                 </div> 
@@ -3784,8 +5672,16 @@ const CalendarView = ({ tasks, currentDate, setCurrentDate, onTaskClick, onDrill
               </div>
               <div className="header-buttons" style={{marginLeft: 0}}>
                 <button className="btn btn-secondary" onClick={downloadTemplate}>📋 표준양식 다운로드</button>
-                <button className="btn btn-success" onClick={() => setUploadModalOpen(true)}>📤 엑셀 업로드</button>
-                <button className="btn btn-primary" onClick={handleOpenTaskModal}>➕ Task 등록</button>
+                <label className="btn btn-success" style={{ cursor: 'pointer', margin: 0 }}>
+                  📤 통합 업로드
+                  <input
+                    type="file"
+                    accept=".xlsx,.xls"
+                    onChange={handleIntegratedUpload}
+                    style={{ display: 'none' }}
+                  />
+                </label>
+                <button className="btn btn-primary" onClick={handleOpenTaskModal}>➕ Task 상세</button>
               </div>
             </header>
             {currentMainView !== 'admin' && (!(currentMainView === 'taskList' && drillDownIds) && <ViewControls />)}
@@ -3808,8 +5704,9 @@ const CalendarView = ({ tasks, currentDate, setCurrentDate, onTaskClick, onDrill
         />
       )}
       <UploadModal isOpen={isUploadModalOpen} onClose={() => setUploadModalOpen(false)} type={uploadType} onUpload={handleUpload} />
-      <EditModal isOpen={isEditModalOpen} onClose={() => setEditModalOpen(false)} task={selectedTaskForEdit} onSave={handleSaveTask} />
+      <EditModal isOpen={isEditModalOpen} onClose={() => setEditModalOpen(false)} task={selectedTaskForEdit} onSave={handleSaveTask} onOpenRevisionModal={(task) => { setSelectedTaskForRevision(task); setRevisionModalOpen(true); }} onUpdateCategoryMaster={handleUpdateCategoryMaster} onNotification={addNotification} />
       <IssueModal isOpen={isIssueModalOpen} onClose={() => setIssueModalOpen(false)} task={selectedTaskForIssues} onUpdate={handleUpdateIssues} user={currentUser} />
+      <RevisionModal isOpen={isRevisionModalOpen} onClose={() => setRevisionModalOpen(false)} task={selectedTaskForRevision} />
       <DailyPerformanceModal
         isOpen={isDailyModalOpen}
         onClose={() => setDailyModalOpen(false)}
@@ -3820,16 +5717,29 @@ const CalendarView = ({ tasks, currentDate, setCurrentDate, onTaskClick, onDrill
             const updatedTasks = prevData.tasks.map(task => {
               if (inputData[task.id] !== undefined || (task.dailyLogs && task.dailyLogs[date])) {
                 const newDailyLogs = { ...(task.dailyLogs || {}) };
-                const newHours = Number(inputData[task.id] || 0);
-                if (newHours > 0) newDailyLogs[date] = newHours;
-                else delete newDailyLogs[date];
-                const totalActual = Object.values(newDailyLogs).reduce((sum: number, h: number) => sum + h, 0);
+                const inputValue = inputData[task.id];
+                if (inputValue) {
+                  // hh.mm 형식 문자열로 저장 (mm이 60 초과 시 자동 변환)
+                  const normalized = normalizeHHMM(inputValue);
+                  if (normalized !== '00.00') {
+                    newDailyLogs[date] = normalized;
+                  } else {
+                    delete newDailyLogs[date];
+                  }
+                } else {
+                  delete newDailyLogs[date];
+                }
+                // 총 실적 시수 계산 (hh.mm 형식 문자열들을 숫자로 변환하여 합산)
+                const dailyLogsValues: string[] = Object.values(newDailyLogs) as string[];
+                const totalActual = dailyLogsValues.reduce((sum: number, h: string) => {
+                  return sum + hhmmToNumber(h || '00.00');
+                }, 0);
                 const dates = Object.keys(newDailyLogs).sort();
                 const newStartDate = dates.length > 0 ? dates[0] : null;
                 const newEndDate = dates.length > 0 ? dates[dates.length - 1] : null;
                 let newStatus = task.status;
-                if (task.status === 'not-started' && (totalActual as number) > 0) newStatus = 'in-progress';
-                return { ...task, status: newStatus, dailyLogs: newDailyLogs, actual: { ...task.actual, hours: totalActual, startDate: newStartDate || task.actual.startDate, endDate: newEndDate || task.actual.endDate } };
+                if (task.status === 'not-started' && totalActual > 0) newStatus = 'in-progress';
+                return { ...task, status: newStatus, dailyLogs: newDailyLogs, actual: { ...task.actual, hours: normalizeHHMM(numberToHHMM(totalActual)), startDate: newStartDate || task.actual.startDate, endDate: newEndDate || task.actual.endDate } };
               }
               return task;
             });
@@ -3844,8 +5754,14 @@ const CalendarView = ({ tasks, currentDate, setCurrentDate, onTaskClick, onDrill
         onSubmit={handleAddTask}
         organization={data.organization}
         existingTasks={data.tasks}
+        onError={(errors) => {
+          setUploadErrors(errors);
+          setErrorModalTitle('Task 등록 오류');
+          setIsErrorModalOpen(true);
+        }}
         currentUser={currentUser}
         onNotification={addNotification}
+        onUpdateCategoryMaster={handleUpdateCategoryMaster}
       />
 
       {/* 로그아웃 확인용 인라인 모달 구현 (삭제 -> 예 로 변경) */}
@@ -3863,6 +5779,14 @@ const CalendarView = ({ tasks, currentDate, setCurrentDate, onTaskClick, onDrill
           </div>
         </div>
       )}
+
+      {/* 에러 모달 */}
+      <ErrorModal
+        isOpen={isErrorModalOpen}
+        title={errorModalTitle}
+        errors={uploadErrors}
+        onClose={() => setIsErrorModalOpen(false)}
+      />
     </>
   );
 };

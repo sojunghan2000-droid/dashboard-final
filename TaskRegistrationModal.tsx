@@ -9,7 +9,7 @@ import type {
   NewTaskFormData 
 } from './types';
 import { categoryMasterData, categoryCodeMapping, orgCodeMapping } from './data';
-import { calculateWorkingDays, getTodayStr } from './utils';
+import { calculateWorkingDays, getTodayStr, numberToHHMM, hhmmToNumber, validateHHMM, normalizeHHMM } from './utils';
 
 interface TaskRegistrationModalProps {
   isOpen: boolean;
@@ -19,6 +19,8 @@ interface TaskRegistrationModalProps {
   existingTasks: Task[];
   currentUser: UserContextType;
   onNotification: (message: string, type: 'success' | 'error') => void;
+  onUpdateCategoryMaster?: (category1: string, category2: string, category3: string) => void;
+  onError?: (errors: string[]) => void;
 }
 
 // 멤버 정보 조회 헬퍼
@@ -123,7 +125,9 @@ export const TaskRegistrationModal: React.FC<TaskRegistrationModalProps> = ({
   organization,
   existingTasks,
   currentUser,
-  onNotification
+  onNotification,
+  onUpdateCategoryMaster,
+  onError
 }) => {
   // 초기 폼 데이터 생성 함수
   const getInitialFormData = useCallback((): NewTaskFormData => {
@@ -139,12 +143,15 @@ export const TaskRegistrationModal: React.FC<TaskRegistrationModalProps> = ({
       assignee: defaultAssignee,
       plannedStart: getTodayStr(),
       plannedEnd: getTodayStr(),
-      plannedDailyHours: '8',
-      plannedHours: '8'
+      plannedDailyHours: '08.00',
+      plannedHours: '08.00',
+      taskCode: ''
     };
   }, [currentUser]);
 
   const [formData, setFormData] = useState<NewTaskFormData>(getInitialFormData());
+  const [showCategory3Dropdown, setShowCategory3Dropdown] = useState(false);
+  const [category3Filter, setCategory3Filter] = useState('');
 
   // 모달이 열릴 때마다 폼 초기화
   useEffect(() => {
@@ -153,53 +160,125 @@ export const TaskRegistrationModal: React.FC<TaskRegistrationModalProps> = ({
     }
   }, [isOpen, getInitialFormData]);
 
-  // 선택된 담당자의 팀 카테고리 마스터
-  const selectedTeamCategoryMaster = useMemo(() => {
+  // Admin의 업무 구분 마스터 데이터 (모든 팀에서 공통 사용)
+  const adminCategoryMaster = useMemo(() => {
+    const firstDept = organization.departments[0];
+    if (firstDept && firstDept.teams.length > 0) {
+      return firstDept.teams[0].categoryMaster || categoryMasterData;
+    }
+    return categoryMasterData;
+  }, [organization]);
+
+  // OBS 마스터 데이터 (담당자 팀 기준으로 필터링)
+  const obsMaster = useMemo(() => {
     const memberInfo = getMemberInfo(formData.assignee, organization);
     if (!memberInfo) return {};
     
     const team = organization.departments[0]?.teams.find(t => t.id === memberInfo.teamId);
-    return team ? team.categoryMaster : {};
+    return team ? (team.obsMaster || {}) : {};
   }, [formData.assignee, organization]);
 
-  // OBS 권한 필터링: Lv.2 키 추출
-  const authorizedLv2Keys = useMemo(() => {
+  // 담당자의 팀 이름
+  const assigneeTeamName = useMemo(() => {
     const memberInfo = getMemberInfo(formData.assignee, organization);
-    if (!memberInfo) return new Set<string>();
+    return memberInfo ? memberInfo.team : '';
+  }, [formData.assignee, organization]);
     
-    const keys = new Set<string>();
-    Object.values(selectedTeamCategoryMaster).forEach((teamMap: any) => {
-      const works = teamMap[memberInfo.team];
-      if (Array.isArray(works)) {
-        works.forEach((w: string) => keys.add(w));
+  // OBS 마스터에서 담당자 팀에 해당하는 업무 구분 Lv.3 목록 추출
+  const obsAllowedCategory3 = useMemo(() => {
+    const allowed = new Set<string>();
+    
+    // OBS 마스터의 모든 Lv.1을 순회
+    Object.values(obsMaster).forEach((lv2Obj: any) => {
+      // Lv.2가 담당자 팀과 일치하는 경우
+      if (lv2Obj && typeof lv2Obj === 'object') {
+        Object.keys(lv2Obj).forEach(teamName => {
+          if (teamName === assigneeTeamName) {
+            const lv3Array = lv2Obj[teamName];
+            if (Array.isArray(lv3Array)) {
+              lv3Array.forEach((lv3: string) => allowed.add(lv3));
+            }
       }
     });
-    return keys;
-  }, [formData.assignee, organization, selectedTeamCategoryMaster]);
+      }
+    });
+    
+    return allowed;
+  }, [obsMaster, assigneeTeamName]);
 
-  // Lv.1 옵션 (OBS 항목 제외)
+  // Lv.1 옵션 (OBS에 등록된 Task 1과 연결된 업무 구분 Lv.1만 표시)
   const category1Options = useMemo(() => {
-    return Object.keys(categoryMasterData).filter(key => !/^\d+\.\s/.test(key));
-  }, []);
+    // OBS에 허용된 Lv.3가 없으면 업무구분 1도 표시하지 않음
+    if (obsAllowedCategory3.size === 0) {
+      return [];
+    }
+    
+    // OBS에 등록된 Lv.3가 속한 Lv.1만 추출
+    const allowedLv1 = new Set<string>();
+    Object.keys(adminCategoryMaster).forEach(lv1Key => {
+      // OBS 마스터 키(숫자로 시작하는 것)는 제외
+      if (/^\d+\.\s/.test(lv1Key)) return;
+      
+      const lv2Obj = adminCategoryMaster[lv1Key] || {};
+      // 해당 Lv.1 아래의 모든 Lv.2를 확인
+      Object.values(lv2Obj).forEach((lv3Array: string[]) => {
+        if (Array.isArray(lv3Array)) {
+          // 해당 Lv.1의 Lv.3 중 하나라도 OBS에 허용된 것인지 확인
+          if (lv3Array.some((lv3: string) => obsAllowedCategory3.has(lv3))) {
+            allowedLv1.add(lv1Key);
+          }
+        }
+      });
+    });
+    
+    return Array.from(allowedLv1);
+  }, [adminCategoryMaster, obsAllowedCategory3]);
 
-  // Lv.2 옵션 (OBS 권한 필터링)
+  // Lv.2 옵션 (Admin의 업무 구분 Lv.2 중분류, OBS에 해당하는 것만 필터링)
   const category2Options = useMemo(() => {
     if (!formData.category1) return [];
     
-    const allLv2Keys = Object.keys(categoryMasterData[formData.category1] || {});
+    const lv2Obj = adminCategoryMaster[formData.category1] || {};
+    const allLv2Keys = Object.keys(lv2Obj);
     
-    if (authorizedLv2Keys.size > 0) {
-      return allLv2Keys.filter(key => authorizedLv2Keys.has(key));
-    }
-    
-    return [];
-  }, [formData.category1, authorizedLv2Keys]);
+    // OBS 마스터에서 해당 Lv.2 아래에 담당자 팀이 있고, 그 팀의 Lv.3가 있는 경우만 필터링
+    return allLv2Keys.filter(lv2Key => {
+      const lv3List = lv2Obj[lv2Key] || [];
+      // 해당 Lv.2의 Lv.3 중 하나라도 OBS에 허용된 것인지 확인
+      return lv3List.some((lv3: string) => obsAllowedCategory3.has(lv3));
+    });
+  }, [formData.category1, adminCategoryMaster, obsAllowedCategory3]);
 
-  // Lv.3 옵션
+  // Lv.3 옵션 (Admin의 업무 구분 Lv.3 소분류, OBS에 해당하는 것만 필터링)
   const category3Options = useMemo(() => {
     if (!formData.category1 || !formData.category2) return [];
-    return categoryMasterData[formData.category1]?.[formData.category2] || [];
-  }, [formData.category1, formData.category2]);
+    
+    const lv3List = adminCategoryMaster[formData.category1]?.[formData.category2] || [];
+    // OBS에 허용된 Lv.3만 필터링
+    return lv3List.filter((lv3: string) => obsAllowedCategory3.has(lv3));
+  }, [formData.category1, formData.category2, adminCategoryMaster, obsAllowedCategory3]);
+
+  // 선택된 업무구분 1, 2에 해당하는 Lv.3 소분류 목록 (Task 1 드롭다운용)
+  const allCategory3Options = useMemo(() => {
+    // 업무구분 1과 2가 선택되지 않았으면 빈 배열
+    if (!formData.category1 || !formData.category2) {
+      return [];
+    }
+    
+    // 선택된 업무구분 1, 2에 해당하는 Lv.3 목록 가져오기
+    const lv3List = adminCategoryMaster[formData.category1]?.[formData.category2] || [];
+    
+    // OBS에 허용된 항목만 필터링
+    return lv3List.filter(lv3 => obsAllowedCategory3.has(lv3)).sort();
+  }, [formData.category1, formData.category2, adminCategoryMaster, obsAllowedCategory3]);
+
+  // 필터링된 Lv.3 옵션 (입력 텍스트 기반)
+  const filteredCategory3Options = useMemo(() => {
+    if (!category3Filter) return allCategory3Options;
+    return allCategory3Options.filter(opt => 
+      opt.toLowerCase().includes(category3Filter.toLowerCase())
+    );
+  }, [allCategory3Options, category3Filter]);
 
   // 폼 필드 변경 핸들러
   const handleFieldChange = useCallback((field: keyof NewTaskFormData, value: string) => {
@@ -236,15 +315,18 @@ export const TaskRegistrationModal: React.FC<TaskRegistrationModalProps> = ({
         updated.plannedEnd = updated.plannedStart;
       }
 
-      // 계획 시수 자동 계산
+      // 계획 시수 자동 계산 (hh.mm 형식)
       if (
         (field === 'plannedStart' || field === 'plannedEnd' || field === 'plannedDailyHours') &&
         updated.plannedStart &&
         updated.plannedEnd &&
-        updated.plannedDailyHours
+        updated.plannedDailyHours &&
+        validateHHMM(updated.plannedDailyHours)
       ) {
         const days = calculateWorkingDays(updated.plannedStart, updated.plannedEnd);
-        updated.plannedHours = String(days * Number(updated.plannedDailyHours));
+        const dailyHours = hhmmToNumber(updated.plannedDailyHours);
+        const totalHours = days * dailyHours;
+        updated.plannedHours = normalizeHHMM(numberToHHMM(totalHours));
       }
 
       return updated;
@@ -253,33 +335,111 @@ export const TaskRegistrationModal: React.FC<TaskRegistrationModalProps> = ({
 
   // 제출 핸들러
   const handleSubmit = useCallback(() => {
+    const errors: string[] = [];
+
     // 유효성 검사
     if (!formData.name.trim()) {
-      alert('Task명은 필수 입력 항목입니다.');
-      return;
-    }
-
-    // 카테고리 선택 여부 확인
-    if (!formData.category1 || !formData.category2 || !formData.category3) {
-      if (!confirm('카테고리가 선택되지 않았습니다. 임시 코드로 생성하시겠습니까?')) {
-        return;
-      }
+      errors.push('Task명은 필수 입력 항목입니다.');
     }
 
     // 담당자 정보 조회
     const memberInfo = getMemberInfo(formData.assignee, organization);
     if (!memberInfo) {
-      alert('담당자 정보를 찾을 수 없습니다.');
-      return;
+      errors.push('담당자 정보를 찾을 수 없습니다.');
     }
 
-    // Task Code 생성
-    const taskCode = generateTaskCode(
-      formData,
-      memberInfo,
-      selectedTeamCategoryMaster,
-      existingTasks
-    );
+    // OBS Lv.2/3 선택 여부 확인
+    if (obsAllowedCategory3.size === 0) {
+      errors.push('OBS Lv.2/3가 선택되지 않았습니다. 담당자의 팀에 OBS 배정이 필요합니다.');
+    }
+
+    // 카테고리 선택 여부 확인
+    if (!formData.category1 || !formData.category2 || !formData.category3) {
+      errors.push('업무 구분 1, 2, Task 1은 필수 선택 항목입니다.');
+    }
+
+    // 날짜 유효성 검사
+    if (!formData.plannedStart) {
+      errors.push('계획 착수일은 필수 입력 항목입니다.');
+    }
+    if (!formData.plannedEnd) {
+      errors.push('계획 종료일은 필수 입력 항목입니다.');
+    }
+    if (formData.plannedStart && formData.plannedEnd && formData.plannedEnd < formData.plannedStart) {
+      errors.push('계획 종료일은 계획 착수일보다 빠를 수 없습니다.');
+    }
+
+    // 시수 유효성 검사
+    if (formData.plannedDailyHours && !validateHHMM(formData.plannedDailyHours)) {
+      errors.push(`하루 예상 시수 형식이 올바르지 않습니다. (예: 08.00)`);
+    }
+    if (formData.plannedHours && !validateHHMM(formData.plannedHours)) {
+      errors.push(`계획 시수 형식이 올바르지 않습니다. (예: 08.00)`);
+    }
+
+    // Task Code 중복 체크 및 자동 번호 생성
+    let finalTaskCode = formData.taskCode?.trim() || '';
+    if (finalTaskCode) {
+      // 입력된 Task Code가 중복되는지 확인
+      const existingTask = existingTasks.find(t => t.taskCode === finalTaskCode);
+      if (existingTask) {
+        // 중복 시 다음 번호 자동 생성
+        const baseCode = finalTaskCode;
+        let suffix = 1;
+        let newCode = `${baseCode}_${suffix}`;
+        
+        // 중복되지 않는 번호를 찾을 때까지 반복
+        while (existingTasks.some(t => t.taskCode === newCode)) {
+          suffix++;
+          newCode = `${baseCode}_${suffix}`;
+        }
+        
+        finalTaskCode = newCode;
+        errors.push(`입력하신 Task Code "${formData.taskCode}"가 이미 존재합니다. "${finalTaskCode}"로 자동 변경됩니다.`);
+      }
+    }
+
+    // 에러가 있으면 에러 모달 표시
+    if (errors.length > 0) {
+      if (onError) {
+        onError(errors);
+      } else {
+        alert(errors.join('\n'));
+      }
+      // Task Code 중복만 있는 경우(다른 에러가 없는 경우) 자동으로 다음 번호로 등록 진행
+      const hasOtherErrors = errors.some(err => !err.includes('Task Code') || !err.includes('자동 변경'));
+      if (!hasOtherErrors && finalTaskCode) {
+        // Task Code만 중복이고 자동 변경된 경우, 계속 진행
+        // finalTaskCode는 이미 설정됨
+      } else {
+        return;
+      }
+    }
+
+    // Lv.3 신규 항목이 마스터에 없으면 추가
+    if (formData.category1 && formData.category2 && formData.category3) {
+      const cat1Data = adminCategoryMaster[formData.category1] || {};
+      const cat3List = cat1Data[formData.category2] || [];
+      
+      // 마스터에 없는 신규 항목인 경우
+      if (!cat3List.includes(formData.category3)) {
+        if (onUpdateCategoryMaster) {
+          onUpdateCategoryMaster(formData.category1, formData.category2, formData.category3);
+          onNotification(`신규 업무 구분 Lv.3 "${formData.category3}"가 마스터에 추가되었습니다.`, 'success');
+        }
+      }
+    }
+
+    // Task Code 결정: 입력된 값이 있으면 사용, 없으면 자동 생성
+    let taskCode = finalTaskCode || '';
+    if (!taskCode) {
+      taskCode = generateTaskCode(
+        formData,
+        memberInfo!,
+        adminCategoryMaster,
+        existingTasks
+      );
+    }
 
     // Task 객체 생성
     const newTask: Task = {
@@ -289,17 +449,17 @@ export const TaskRegistrationModal: React.FC<TaskRegistrationModalProps> = ({
       category1: formData.category1 || '',
       category2: formData.category2 || '',
       category3: formData.category3 || '',
-      department: memberInfo.department || '미지정',
-      team: memberInfo.team,
-      group: memberInfo.group,
+      department: memberInfo!.department || '미지정',
+      team: memberInfo!.team,
+      group: memberInfo!.group,
       assignee: formData.assignee,
-      assigneeName: memberInfo.name,
+      assigneeName: memberInfo!.name,
       planned: {
         startDate: formData.plannedStart || null,
         endDate: formData.plannedEnd || null,
-        hours: Number(formData.plannedHours) || 0
+        hours: validateHHMM(formData.plannedHours) ? normalizeHHMM(formData.plannedHours) : '00.00'
       },
-      actual: { startDate: null, endDate: null, hours: 0 },
+      actual: { startDate: null, endDate: null, hours: '00.00' },
       revisions: [],
       status: 'not-started',
       monthlyIssues: [{
@@ -314,7 +474,7 @@ export const TaskRegistrationModal: React.FC<TaskRegistrationModalProps> = ({
     onSubmit(newTask);
     onNotification(`Task 등록 완료 (Code: ${taskCode})`, 'success');
     onClose();
-  }, [formData, organization, selectedTeamCategoryMaster, existingTasks, onSubmit, onNotification, onClose]);
+  }, [formData, organization, adminCategoryMaster, existingTasks, obsAllowedCategory3, onSubmit, onNotification, onClose, onUpdateCategoryMaster, onError]);
 
   if (!isOpen) return null;
 
@@ -324,15 +484,13 @@ export const TaskRegistrationModal: React.FC<TaskRegistrationModalProps> = ({
 
   // 멤버 정보 (옵션 렌더링용)
   const memberInfo = getMemberInfo(formData.assignee, organization);
-  const assigneeTeamName = memberInfo ? memberInfo.team : '';
 
   return (
     <div 
       className="modal show" 
-      onClick={(e) => e.target === e.currentTarget && onClose()}
     >
       <div className="modal-content">
-        <h3 className="modal-header">Task 등록</h3>
+        <h3 className="modal-header">Task 상세</h3>
         
         {/* 담당자 선택 */}
         {currentUser?.role !== 'member' && (
@@ -358,16 +516,21 @@ export const TaskRegistrationModal: React.FC<TaskRegistrationModalProps> = ({
         )}
 
         <div className="form-row">
-          {/* Lv.1: 업무 카테고리 1 */}
+          {/* Lv.1: 업무 구분 1 */}
           <div className="form-group">
-            <label className="form-label">업무카테고리1 (과제유형)</label>
+            <label className="form-label">업무 구분 1</label>
             <select
               className="form-input"
               value={formData.category1}
               onChange={(e) => handleFieldChange('category1', e.target.value)}
-              style={inputStyle}
+              disabled={obsAllowedCategory3.size === 0}
+              style={obsAllowedCategory3.size === 0 ? disabledStyle : inputStyle}
             >
-              <option value="">선택하세요</option>
+              <option value="">
+                {obsAllowedCategory3.size === 0
+                  ? "OBS에 배정된 업무가 없습니다"
+                  : "선택하세요"}
+              </option>
               {category1Options.map(cat => (
                 <option key={cat} value={cat}>
                   {cat} {(categoryCodeMapping.category1 as any)[cat] 
@@ -378,9 +541,9 @@ export const TaskRegistrationModal: React.FC<TaskRegistrationModalProps> = ({
             </select>
           </div>
 
-          {/* Lv.2: 업무 카테고리 2 (OBS 권한 필터링) */}
+          {/* Lv.2: 업무 구분 2 (OBS 권한 필터링) */}
           <div className="form-group">
-            <label className="form-label">업무카테고리2 (업무구분)</label>
+            <label className="form-label">업무 구분 2</label>
             <select
               className="form-input"
               value={formData.category2}
@@ -391,8 +554,6 @@ export const TaskRegistrationModal: React.FC<TaskRegistrationModalProps> = ({
               <option value="">
                 {!formData.category1
                   ? "상위 항목을 선택하세요"
-                  : authorizedLv2Keys.size === 0
-                    ? "OBS에 배정된 업무가 없습니다"
                     : category2Options.length === 0
                       ? "해당 유형에 배정된 업무 없음"
                       : "선택하세요"}
@@ -404,40 +565,83 @@ export const TaskRegistrationModal: React.FC<TaskRegistrationModalProps> = ({
           </div>
         </div>
 
-        {/* Lv.3: 업무 카테고리 3 */}
-        <div className="form-group">
-          <label className="form-label">업무카테고리3 (상세)</label>
-          {category3Options.length > 0 ? (
-            <select
-              className="form-input"
-              value={formData.category3}
-              onChange={(e) => handleFieldChange('category3', e.target.value)}
-              disabled={!formData.category2}
-              style={!formData.category2 ? disabledStyle : inputStyle}
-            >
-              <option value="">
-                {!formData.category2 ? "상위 항목을 선택하세요" : "선택하세요"}
-              </option>
-              {category3Options.map(opt => (
-                <option key={opt} value={opt}>{opt}</option>
-              ))}
-            </select>
-          ) : (
+        {/* Lv.3: Task 1 (항상 입력 가능, 커스텀 드롭다운으로 모든 업무 구분 Lv.3 소분류 참조) */}
+        <div className="form-row">
+          <div className="form-group" style={{ position: 'relative' }}>
+            <label className="form-label">Task 1</label>
             <input
               type="text"
               className="form-input"
               value={formData.category3}
-              onChange={(e) => handleFieldChange('category3', e.target.value)}
-              placeholder={formData.category2 ? "상세 내용을 직접 입력하세요" : "상위 항목 선택 필요"}
+              onChange={(e) => {
+                handleFieldChange('category3', e.target.value);
+                setCategory3Filter(e.target.value);
+                setShowCategory3Dropdown(true);
+              }}
+              onFocus={() => {
+                if (formData.category2) {
+                  setShowCategory3Dropdown(true);
+                  setCategory3Filter(formData.category3);
+                }
+              }}
+              onBlur={(e) => {
+                // 드롭다운 클릭 시에는 닫히지 않도록 약간의 지연
+                setTimeout(() => setShowCategory3Dropdown(false), 200);
+              }}
+              placeholder={formData.category2 ? "선택하거나 직접 입력" : "상위 항목 선택 필요"}
               disabled={!formData.category2}
               style={!formData.category2 ? disabledStyle : inputStyle}
             />
+            {/* 커스텀 드롭다운 리스트 */}
+            {showCategory3Dropdown && formData.category2 && filteredCategory3Options.length > 0 && (
+              <div 
+                className="custom-dropdown"
+                style={{
+                  position: 'absolute',
+                  top: '100%',
+                  left: 0,
+                  right: 0,
+                  backgroundColor: '#fff',
+                  border: '1px solid #ced4da',
+                  borderRadius: '0.375rem',
+                  boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                  maxHeight: '200px',
+                  overflowY: 'auto',
+                  zIndex: 1000,
+                  marginTop: '4px'
+                }}
+                onMouseDown={(e) => e.preventDefault()}
+              >
+                {filteredCategory3Options.map(opt => (
+                  <div
+                    key={opt}
+                    className="dropdown-option"
+                    style={{
+                      padding: '0.5rem 0.75rem',
+                      cursor: 'pointer',
+                      borderBottom: '1px solid #f0f0f0'
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.backgroundColor = '#f8f9fa';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.backgroundColor = '#fff';
+                    }}
+                    onClick={() => {
+                      handleFieldChange('category3', opt);
+                      setCategory3Filter('');
+                      setShowCategory3Dropdown(false);
+                    }}
+                  >
+                    {opt}
+                  </div>
+                ))}
+              </div>
           )}
         </div>
-
-        {/* Task명 */}
+          {/* Task 2 */}
         <div className="form-group">
-          <label className="form-label">Task명</label>
+            <label className="form-label">Task 2</label>
           <input
             type="text"
             className="form-input"
@@ -446,6 +650,23 @@ export const TaskRegistrationModal: React.FC<TaskRegistrationModalProps> = ({
             placeholder="Task명을 입력하세요"
             style={inputStyle}
           />
+          </div>
+        </div>
+
+        {/* Task Code 입력 필드 */}
+        <div className="form-group">
+          <label className="form-label">Task Code (선택사항)</label>
+          <input
+            type="text"
+            className="form-input"
+            value={formData.taskCode || ''}
+            onChange={(e) => handleFieldChange('taskCode', e.target.value)}
+            placeholder="Task Code를 입력하세요 (중복 시 자동 번호 생성)"
+            style={inputStyle}
+          />
+          <small style={{ color: '#6c757d', fontSize: '0.85rem', marginTop: '4px', display: 'block' }}>
+            입력하지 않으면 자동 생성됩니다. 중복 시 자동으로 다음 번호가 생성됩니다.
+          </small>
         </div>
 
         {/* 계획 기간 */}
@@ -476,24 +697,60 @@ export const TaskRegistrationModal: React.FC<TaskRegistrationModalProps> = ({
         {/* 시수 정보 */}
         <div className="form-row">
           <div className="form-group">
-            <label className="form-label">하루 예상 시수 (h)</label>
+            <label className="form-label">하루 예상 시수</label>
             <input
-              type="number"
+              type="text"
               className="form-input"
               value={formData.plannedDailyHours}
-              onChange={(e) => handleFieldChange('plannedDailyHours', e.target.value)}
-              placeholder="예: 4"
+              onChange={(e) => {
+                const val = e.target.value;
+                if (val === '' || validateHHMM(val)) {
+                  handleFieldChange('plannedDailyHours', normalizeHHMM(val || '00.00'));
+                } else {
+                  handleFieldChange('plannedDailyHours', val);
+                }
+              }}
+              onBlur={(e) => {
+                const val = e.target.value;
+                if (val && validateHHMM(val)) {
+                  const normalized = normalizeHHMM(val);
+                  if (normalized !== val) {
+                    handleFieldChange('plannedDailyHours', normalized);
+                  }
+                }
+              }}
+              placeholder="hh.mm (mm:00~60)"
+              pattern="\d{2}\.\d{2}"
+              title="hh.mm 형식 (예: 08.30 = 8시간 30분, mm은 00~60, 60mm=1h)"
               style={inputStyle}
             />
           </div>
           <div className="form-group">
-            <label className="form-label">계획 시수 (h)</label>
+            <label className="form-label">계획 시수</label>
             <input
-              type="number"
+              type="text"
               className="form-input"
               value={formData.plannedHours}
-              onChange={(e) => handleFieldChange('plannedHours', e.target.value)}
-              placeholder="자동 계산 또는 직접 입력"
+              onChange={(e) => {
+                const val = e.target.value;
+                if (val === '' || validateHHMM(val)) {
+                  handleFieldChange('plannedHours', normalizeHHMM(val || '00.00'));
+                } else {
+                  handleFieldChange('plannedHours', val);
+                }
+              }}
+              onBlur={(e) => {
+                const val = e.target.value;
+                if (val && validateHHMM(val)) {
+                  const normalized = normalizeHHMM(val);
+                  if (normalized !== val) {
+                    handleFieldChange('plannedHours', normalized);
+                  }
+                }
+              }}
+              placeholder="자동 계산 또는 직접 입력 (hh.mm, mm:00~60)"
+              pattern="\d{2}\.\d{2}"
+              title="hh.mm 형식 (예: 08.30 = 8시간 30분, mm은 00~60, 60mm=1h)"
               style={inputStyle}
             />
           </div>
