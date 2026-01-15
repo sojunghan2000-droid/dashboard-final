@@ -1,6 +1,6 @@
 // --- Type Definitions ---
 
-export type UserRole = 'admin' | 'team_leader' | 'group_leader' | 'member';
+export type UserRole = 'admin' | 'dept_head' | 'team_leader' | 'group_leader' | 'member';
 
 export type Reply = {
   id: string;
@@ -13,6 +13,7 @@ export type Reply = {
 export type Issue = { 
   date: string; // YYYY-MM-DD
   issue: string; 
+  author?: string; // 의견(이슈) 작성자 이름
   reviewed: boolean;
   replies?: Reply[]; 
   month?: string; 
@@ -44,6 +45,11 @@ export type Task = {
   group: string;
   assignee: string;
   assigneeName: string;
+  // Task 등록 구분용 메타데이터
+  // - createdByRole === 'admin' (또는 누락) => Task 목록에서 R.0/R.1/... 표기
+  // - createdByRole !== 'admin' => Task 목록에서 '추가' 표기
+  createdByRole?: UserRole;
+  createdVia?: 'manual' | 'excel_upload' | 'integrated_upload' | 'unknown';
   planned: Period;
   revisions: Revision[];
   actual: Period;
@@ -106,7 +112,18 @@ export type SampleData = {
 export type ViewType = 'department' | 'team' | 'group' | 'member';
 
 // Sorting Types
-export type SortKey = 'taskCode' | 'category' | 'name' | 'assigneeName' | 'affiliation' | 'planned' | 'actual' | 'status' | 'issues';
+export type SortKey =
+  | 'taskCode'
+  | 'category'
+  | 'name'
+  | 'assigneeName'
+  | 'affiliation'
+  | 'planned'
+  | 'actual'
+  | 'status'
+  | 'issues'
+  | 'registration'
+  | 'active';
 
 export type SortConfig = { 
   key: SortKey; 

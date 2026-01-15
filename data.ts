@@ -22,10 +22,15 @@ import { numberToHHMM, normalizeHHMM } from './utils';
 export const categoryCodeMapping = {
   category1: {
     '기획': 'PL01',      // Planning
+    '기획 (PL01)': 'PL01',
     '현장지원': 'FS01',  // Field Support
+    '현장지원 (FS01)': 'FS01',
     '기술 개발': 'DV01', // Development
+    '기술 개발 (DV01)': 'DV01',
     '연구': 'RS01',      // Research
+    '연구 (RS01)': 'RS01',
     '기타': 'OT01'       // Others
+    , '기타 (OT01)': 'OT01'
   }
 };
 
@@ -285,7 +290,7 @@ const initialOrganizationData: Organization = {
             name: '자연어처리그룹', 
             members: [
               { id: 'emp01', name: '김철수', position: '선임연구원' }, 
-              { id: 'emp02', name: '이영희', position: '주임연구원' }
+              { id: 'emp02', name: '이영희', position: '주임연구원', role: 'group_leader' }
             ] 
           }, 
           { 
@@ -340,7 +345,8 @@ const initialOrganizationData: Organization = {
             { id: 'emp33', name: '이승우', position: '프로' }, 
             { id: 'emp34', name: '김재석', position: '선임프로' }, 
             { id: 'emp35', name: '장경욱', position: '프로' },
-            { id: 'a', name: '소중한', position: '프로' }
+            { id: 'a', name: '소중한', position: '프로' },
+            { id: 'ceo01', name: '소병식', position: '실장', loginId: 'CEO', password: '1234', role: 'dept_head' }
           ] 
         }], 
         categoryMaster: JSON.parse(JSON.stringify(categoryMasterData)),
@@ -365,7 +371,8 @@ const hydrateMembersWithAuth = (org: Organization): Organization => {
           } else { 
             if (!m.password) m.password = '1234'; 
             if (!m.role) { 
-              if (m.position.includes('팀장') || m.position.includes('수석')) m.role = 'team_leader'; 
+              if (m.position.includes('실장')) m.role = 'dept_head';
+              else if (m.position.includes('팀장') || m.position.includes('수석')) m.role = 'team_leader'; 
               else if (m.position.includes('파트장') || m.position.includes('책임')) m.role = 'group_leader'; 
               else m.role = 'member'; 
             } 

@@ -9,7 +9,8 @@ import type {
   NewTaskFormData 
 } from './types';
 import { categoryMasterData, categoryCodeMapping, orgCodeMapping } from './data';
-import { calculateWorkingDays, getTodayStr, numberToHHMM, hhmmToNumber, validateHHMM, normalizeHHMM } from './utils';
+import { calculateWorkingDays, getTodayStr, numberToHHMM, hhmmToNumber, validateHHMM, normalizeHHMM, normalizeFlexibleHHMMInput } from './utils';
+import { generateTaskCodeForTask2 } from './taskCode';
 
 interface TaskRegistrationModalProps {
   isOpen: boolean;
@@ -42,50 +43,6 @@ const getMemberInfo = (memberId: string, organization: Organization) => {
     }
   }
   return null;
-};
-
-// Task Code 생성 헬퍼
-const generateTaskCode = (
-  formData: NewTaskFormData,
-  memberInfo: any,
-  teamCategoryMaster: CategoryMaster,
-  existingTasks: Task[]
-): string => {
-  if (!memberInfo || !formData.category1 || !formData.category2 || !formData.category3) {
-    const dateStr = new Date().toISOString().slice(2, 10).replace(/-/g, '');
-    return `T-${dateStr}-${Math.floor(Math.random() * 1000)}`;
-  }
-
-  try {
-    // 조직 코드 매핑
-    const deptCode = (orgCodeMapping.departments as any)[memberInfo.department] || 'DXX';
-    const teamCode = (orgCodeMapping.teams as any)[memberInfo.team] || 'TXX';
-    const groupCode = (orgCodeMapping.groups as any)[memberInfo.group] || 'GXX';
-    const orgPrefix = `${deptCode}-${teamCode}-${groupCode}`;
-
-    // 카테고리 코드 매핑
-    const cat1Code = (categoryCodeMapping.category1 as any)[formData.category1] || 'X01';
-    
-    // 카테고리 인덱스 찾기
-    const cat1Data = teamCategoryMaster[formData.category1] || {};
-    const cat2Keys = Object.keys(cat1Data);
-    const cat2Index = cat2Keys.indexOf(formData.category2) + 1 || 1;
-    
-    const cat3Keys = cat1Data[formData.category2] || [];
-    const cat3Index = cat3Keys.indexOf(formData.category3) + 1 || 1;
-
-    // 일련번호 계산
-    const prefixPattern = `${orgPrefix}-${cat1Code}.${cat2Index}.${cat3Index}`;
-    const existingCount = existingTasks.filter(
-      t => t.taskCode && t.taskCode.startsWith(prefixPattern)
-    ).length;
-    const nextSequence = existingCount + 1;
-
-    return `${prefixPattern}.${nextSequence}`;
-  } catch (err) {
-    console.error("Task Code Generation Error:", err);
-    return `ERR-${Date.now()}`;
-  }
 };
 
 // 자동 Task 이름 생성
@@ -153,13 +110,6 @@ export const TaskRegistrationModal: React.FC<TaskRegistrationModalProps> = ({
   const [showCategory3Dropdown, setShowCategory3Dropdown] = useState(false);
   const [category3Filter, setCategory3Filter] = useState('');
 
-  // 모달이 열릴 때마다 폼 초기화
-  useEffect(() => {
-    if (isOpen) {
-      setFormData(getInitialFormData());
-    }
-  }, [isOpen, getInitialFormData]);
-
   // Admin의 업무 구분 마스터 데이터 (모든 팀에서 공통 사용)
   const adminCategoryMaster = useMemo(() => {
     const firstDept = organization.departments[0];
@@ -168,6 +118,54 @@ export const TaskRegistrationModal: React.FC<TaskRegistrationModalProps> = ({
     }
     return categoryMasterData;
   }, [organization]);
+
+  // 모달이 열릴 때마다 폼 초기화
+  useEffect(() => {
+    if (isOpen) {
+      setFormData(getInitialFormData());
+    }
+  }, [isOpen, getInitialFormData]);
+
+  // Task 2 기반 Task Code 자동 생성 (Admin 마스터 기반 + 중복 없는 번호)
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const memberInfo = getMemberInfo(formData.assignee, organization);
+    const shouldGenerate =
+      !!formData.name.trim() &&
+      !!formData.category1 &&
+      !!formData.category2 &&
+      !!formData.category3 &&
+      !!memberInfo;
+
+    if (!shouldGenerate) {
+      // Clear only if user hasn't submitted anything yet; keep deterministic
+      setFormData(prev => (prev.taskCode ? { ...prev, taskCode: '' } : prev));
+      return;
+    }
+
+    const nextCode = generateTaskCodeForTask2({
+      taskName: formData.name,
+      category1: formData.category1,
+      category2: formData.category2,
+      category3: formData.category3,
+      memberInfo: { department: memberInfo.department, team: memberInfo.team, group: memberInfo.group },
+      adminCategoryMaster,
+      existingTasks
+    });
+
+    setFormData(prev => (prev.taskCode === nextCode ? prev : { ...prev, taskCode: nextCode }));
+  }, [
+    isOpen,
+    formData.name,
+    formData.category1,
+    formData.category2,
+    formData.category3,
+    formData.assignee,
+    organization,
+    adminCategoryMaster,
+    existingTasks
+  ]);
 
   // OBS 마스터 데이터 (담당자 팀 기준으로 필터링)
   const obsMaster = useMemo(() => {
@@ -377,27 +375,7 @@ export const TaskRegistrationModal: React.FC<TaskRegistrationModalProps> = ({
       errors.push(`계획 시수 형식이 올바르지 않습니다. (예: 08.00)`);
     }
 
-    // Task Code 중복 체크 및 자동 번호 생성
-    let finalTaskCode = formData.taskCode?.trim() || '';
-    if (finalTaskCode) {
-      // 입력된 Task Code가 중복되는지 확인
-      const existingTask = existingTasks.find(t => t.taskCode === finalTaskCode);
-      if (existingTask) {
-        // 중복 시 다음 번호 자동 생성
-        const baseCode = finalTaskCode;
-        let suffix = 1;
-        let newCode = `${baseCode}_${suffix}`;
-        
-        // 중복되지 않는 번호를 찾을 때까지 반복
-        while (existingTasks.some(t => t.taskCode === newCode)) {
-          suffix++;
-          newCode = `${baseCode}_${suffix}`;
-        }
-        
-        finalTaskCode = newCode;
-        errors.push(`입력하신 Task Code "${formData.taskCode}"가 이미 존재합니다. "${finalTaskCode}"로 자동 변경됩니다.`);
-      }
-    }
+    // Task Code는 Task 2 기반으로 자동 생성되며(마스터 기반), 수동 입력을 받지 않습니다.
 
     // 에러가 있으면 에러 모달 표시
     if (errors.length > 0) {
@@ -406,14 +384,7 @@ export const TaskRegistrationModal: React.FC<TaskRegistrationModalProps> = ({
       } else {
         alert(errors.join('\n'));
       }
-      // Task Code 중복만 있는 경우(다른 에러가 없는 경우) 자동으로 다음 번호로 등록 진행
-      const hasOtherErrors = errors.some(err => !err.includes('Task Code') || !err.includes('자동 변경'));
-      if (!hasOtherErrors && finalTaskCode) {
-        // Task Code만 중복이고 자동 변경된 경우, 계속 진행
-        // finalTaskCode는 이미 설정됨
-      } else {
-        return;
-      }
+      return;
     }
 
     // Lv.3 신규 항목이 마스터에 없으면 추가
@@ -430,16 +401,16 @@ export const TaskRegistrationModal: React.FC<TaskRegistrationModalProps> = ({
       }
     }
 
-    // Task Code 결정: 입력된 값이 있으면 사용, 없으면 자동 생성
-    let taskCode = finalTaskCode || '';
-    if (!taskCode) {
-      taskCode = generateTaskCode(
-        formData,
-        memberInfo!,
-        adminCategoryMaster,
-        existingTasks
-      );
-    }
+    // Task Code 결정: Task 2 기반 자동 생성(중복 없는 번호)
+    const taskCode = generateTaskCodeForTask2({
+      taskName: formData.name,
+      category1: formData.category1,
+      category2: formData.category2,
+      category3: formData.category3,
+      memberInfo: memberInfo ? { department: memberInfo.department, team: memberInfo.team, group: memberInfo.group } : null,
+      adminCategoryMaster,
+      existingTasks
+    });
 
     // Task 객체 생성
     const newTask: Task = {
@@ -490,7 +461,7 @@ export const TaskRegistrationModal: React.FC<TaskRegistrationModalProps> = ({
       className="modal show" 
     >
       <div className="modal-content">
-        <h3 className="modal-header">Task 상세</h3>
+        <h3 className="modal-header">Task 등록</h3>
         
         {/* 담당자 선택 */}
         {currentUser?.role !== 'member' && (
@@ -655,17 +626,17 @@ export const TaskRegistrationModal: React.FC<TaskRegistrationModalProps> = ({
 
         {/* Task Code 입력 필드 */}
         <div className="form-group">
-          <label className="form-label">Task Code (선택사항)</label>
+          <label className="form-label">Task Code</label>
           <input
             type="text"
             className="form-input"
             value={formData.taskCode || ''}
-            onChange={(e) => handleFieldChange('taskCode', e.target.value)}
-            placeholder="Task Code를 입력하세요 (중복 시 자동 번호 생성)"
-            style={inputStyle}
+            disabled
+            placeholder="Task 2 기준으로 자동 생성됩니다"
+            style={disabledStyle}
           />
           <small style={{ color: '#6c757d', fontSize: '0.85rem', marginTop: '4px', display: 'block' }}>
-            입력하지 않으면 자동 생성됩니다. 중복 시 자동으로 다음 번호가 생성됩니다.
+            Admin 마스터(조직/업무구분) 기반으로 생성되며, Task 2 기준으로 번호가 절대 중복되지 않게 자동 채번됩니다.
           </small>
         </div>
 
@@ -704,24 +675,22 @@ export const TaskRegistrationModal: React.FC<TaskRegistrationModalProps> = ({
               value={formData.plannedDailyHours}
               onChange={(e) => {
                 const val = e.target.value;
-                if (val === '' || validateHHMM(val)) {
-                  handleFieldChange('plannedDailyHours', normalizeHHMM(val || '00.00'));
-                } else {
-                  handleFieldChange('plannedDailyHours', val);
+                if (val === '') {
+                  handleFieldChange('plannedDailyHours', '');
+                  return;
                 }
+                const normalized = normalizeFlexibleHHMMInput(val);
+                handleFieldChange('plannedDailyHours', normalized ?? val);
               }}
               onBlur={(e) => {
                 const val = e.target.value;
-                if (val && validateHHMM(val)) {
-                  const normalized = normalizeHHMM(val);
-                  if (normalized !== val) {
-                    handleFieldChange('plannedDailyHours', normalized);
-                  }
-                }
+                if (!val) return;
+                const normalized = normalizeFlexibleHHMMInput(val);
+                if (normalized) handleFieldChange('plannedDailyHours', normalized);
+                else handleFieldChange('plannedDailyHours', '');
               }}
-              placeholder="hh.mm (mm:00~60)"
-              pattern="\d{2}\.\d{2}"
-              title="hh.mm 형식 (예: 08.30 = 8시간 30분, mm은 00~60, 60mm=1h)"
+              placeholder="예) hh.mm"
+              pattern="\d+(\.\d+)?"
               style={inputStyle}
             />
           </div>
@@ -733,24 +702,22 @@ export const TaskRegistrationModal: React.FC<TaskRegistrationModalProps> = ({
               value={formData.plannedHours}
               onChange={(e) => {
                 const val = e.target.value;
-                if (val === '' || validateHHMM(val)) {
-                  handleFieldChange('plannedHours', normalizeHHMM(val || '00.00'));
-                } else {
-                  handleFieldChange('plannedHours', val);
+                if (val === '') {
+                  handleFieldChange('plannedHours', '');
+                  return;
                 }
+                const normalized = normalizeFlexibleHHMMInput(val);
+                handleFieldChange('plannedHours', normalized ?? val);
               }}
               onBlur={(e) => {
                 const val = e.target.value;
-                if (val && validateHHMM(val)) {
-                  const normalized = normalizeHHMM(val);
-                  if (normalized !== val) {
-                    handleFieldChange('plannedHours', normalized);
-                  }
-                }
+                if (!val) return;
+                const normalized = normalizeFlexibleHHMMInput(val);
+                if (normalized) handleFieldChange('plannedHours', normalized);
+                else handleFieldChange('plannedHours', '');
               }}
-              placeholder="자동 계산 또는 직접 입력 (hh.mm, mm:00~60)"
-              pattern="\d{2}\.\d{2}"
-              title="hh.mm 형식 (예: 08.30 = 8시간 30분, mm은 00~60, 60mm=1h)"
+              placeholder="예) hh.mm"
+              pattern="\d+(\.\d+)?"
               style={inputStyle}
             />
           </div>

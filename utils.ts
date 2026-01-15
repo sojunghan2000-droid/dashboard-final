@@ -123,3 +123,35 @@ export const normalizeHHMM = (hhmm: string): string => {
   
   return `${String(h).padStart(2, '0')}.${String(m).padStart(2, '0')}`;
 };
+
+// 유연한 hh.mm 입력 파서
+// - 8 -> 8.00
+// - 0.1 -> 0.10
+// - 0.01 -> 0.01
+// - 소수점 2자리 초과 입력은 "올림" 처리 (예: 0.001 -> 0.01, 1.009 -> 1.01)
+// - mm은 0~60 범위만 허용
+export const normalizeFlexibleHHMMInput = (raw: string): string | null => {
+  const s = (raw ?? '').trim();
+  if (!s) return null;
+  if (!/^\d+(\.\d+)?$/.test(s) && !/^\d+\.?$/.test(s)) return null;
+  const [hStr, frac = ''] = s.split('.');
+  const h = parseInt(hStr, 10);
+  if (Number.isNaN(h) || h < 0) return null;
+
+  // "8" 또는 "8." 형태
+  if (!s.includes('.') || frac.length === 0) return `${h}.00`;
+
+  // 소수점 1자리: 10분 단위
+  // 소수점 2자리: 그대로 분
+  // 소수점 3자리 이상: 뒤에 남는 값이 있으면 올림(최소 0.01 보장)
+  const head2 = frac.padEnd(2, '0').slice(0, 2);
+  let m = parseInt(head2, 10);
+  if (Number.isNaN(m)) return null;
+
+  const rest = frac.slice(2);
+  const shouldCeil = rest.length > 0 && /[1-9]/.test(rest);
+  if (shouldCeil) m += 1;
+
+  if (m < 0 || m > 60) return null;
+  return `${h}.${String(m).padStart(2, '0')}`;
+};
