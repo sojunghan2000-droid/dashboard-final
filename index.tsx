@@ -173,7 +173,10 @@ const setTextFormatForColumns = (ws: any, colIdxs: number[], opts?: { ensureRows
 };
 
 const STORAGE_KEYS = {
-  organization: 'pm_dashboard_organization_v1'
+  organization: 'pm_dashboard_organization_v1',
+  tasks: 'pm_dashboard_tasks_v1',
+  user: 'pm_dashboard_user_v1',
+  uiState: 'pm_dashboard_ui_state_v1'
 } as const;
 
 const saveOrganizationToLocal = (organization: Organization) => {
@@ -184,6 +187,99 @@ const saveOrganizationToLocal = (organization: Organization) => {
     console.error('Save failed:', e);
     alert('저장 중 오류가 발생했습니다.');
   }
+};
+
+// Tasks 데이터 저장
+const saveTasksToLocal = (tasks: Task[]) => {
+  try {
+    window.localStorage.setItem(STORAGE_KEYS.tasks, JSON.stringify(tasks));
+  } catch (e) {
+    console.error('Tasks save failed:', e);
+  }
+};
+
+// Tasks 데이터 로드
+const loadTasksFromLocal = (): Task[] | null => {
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      const saved = window.localStorage.getItem(STORAGE_KEYS.tasks);
+      if (saved) {
+        return JSON.parse(saved) as Task[];
+      }
+    }
+  } catch (e) {
+    console.warn('Failed to load tasks from localStorage:', e);
+  }
+  return null;
+};
+
+// 사용자 상태 저장 (sessionStorage - 브라우저 닫으면 사라짐)
+const saveUserToSession = (user: UserContextType) => {
+  try {
+    if (user) {
+      window.sessionStorage.setItem(STORAGE_KEYS.user, JSON.stringify(user));
+    } else {
+      window.sessionStorage.removeItem(STORAGE_KEYS.user);
+    }
+  } catch (e) {
+    console.error('User save failed:', e);
+  }
+};
+
+// 사용자 상태 로드
+const loadUserFromSession = (): UserContextType | null => {
+  try {
+    if (typeof window !== 'undefined' && window.sessionStorage) {
+      const saved = window.sessionStorage.getItem(STORAGE_KEYS.user);
+      if (saved) {
+        return JSON.parse(saved) as UserContextType;
+      }
+    }
+  } catch (e) {
+    console.warn('Failed to load user from sessionStorage:', e);
+  }
+  return null;
+};
+
+// UI 상태 타입 정의
+type UIState = {
+  currentMainView?: 'dashboard' | 'taskList' | 'calendar' | 'admin';
+  currentView?: ViewType;
+  filters?: { team: string; group: string; member: string };
+  filterStartMonth?: string;
+  filterEndMonth?: string;
+  statusFilter?: string;
+  sortConfig?: SortConfig[];
+  showInactive?: boolean;
+  excludeCompleted?: boolean;
+  taskSearchQuery?: string;
+  taskTableColumnWidths?: number[];
+  calendarDate?: string; // ISO string
+  isSidebarCollapsed?: boolean;
+};
+
+// UI 상태 저장
+const saveUIStateToLocal = (state: UIState) => {
+  try {
+    window.localStorage.setItem(STORAGE_KEYS.uiState, JSON.stringify(state));
+  } catch (e) {
+    console.error('UI state save failed:', e);
+  }
+};
+
+// UI 상태 로드
+const loadUIStateFromLocal = (): UIState | null => {
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      const saved = window.localStorage.getItem(STORAGE_KEYS.uiState);
+      if (saved) {
+        return JSON.parse(saved) as UIState;
+      }
+    }
+  } catch (e) {
+    console.warn('Failed to load UI state from localStorage:', e);
+  }
+  return null;
 };
 
 // -----------------------------------------------------------------------------
@@ -6674,7 +6770,10 @@ const App = () => {
   );
 
   const [isLogoutConfirmOpen, setLogoutConfirmOpen] = useState(false);
-  const [currentUser, setCurrentUser] = useState<UserContextType>(null);
+  // 저장된 사용자 상태 복원
+  const [currentUser, setCurrentUser] = useState<UserContextType>(() => {
+    return loadUserFromSession();
+  });
 
   const [data, setData] = useState<SampleData>(() => {
     let migratedData = { ...sampleData };
@@ -6731,6 +6830,12 @@ const App = () => {
             migratedData.organization = parsed as Organization;
           }
         }
+        
+        // 저장된 tasks 데이터 로드
+        const savedTasks = loadTasksFromLocal();
+        if (savedTasks && Array.isArray(savedTasks) && savedTasks.length > 0) {
+          migratedData.tasks = savedTasks;
+        }
       }
     } catch (e) {
       // eslint-disable-next-line no-console
@@ -6739,7 +6844,10 @@ const App = () => {
 
     // ✅ 로컬 저장본이 있어도 필수 하드코딩 사용자/권한은 보정
     migratedData.organization = ensureHardcodedUsers(migratedData.organization);
-    const migratedTasks = sampleData.tasks.map(task => {
+    
+    // 저장된 tasks가 없으면 샘플 데이터로 마이그레이션
+    const tasksToMigrate = migratedData.tasks.length > 0 ? migratedData.tasks : sampleData.tasks;
+    const migratedTasks = tasksToMigrate.map(task => {
       const newTask = { ...task };
       // @ts-ignore
       if (newTask.revised) {
@@ -6778,24 +6886,41 @@ const App = () => {
     return migratedData;
   });
 
-  const [currentMainView, setCurrentMainView] = useState<'dashboard' | 'taskList' | 'calendar' | 'admin'>('dashboard');
-  const [currentView, setCurrentView] = useState<ViewType>('department');
-  const [filters, setFilters] = useState({ team: 'team1', group: 'group1', member: 'emp01' });
+  // 저장된 UI 상태 복원
+  const savedUIState = loadUIStateFromLocal();
   const currentYear = new Date().getFullYear();
-  const [filterStartMonth, setFilterStartMonth] = useState(`${currentYear}-01`);
-  const [filterEndMonth, setFilterEndMonth] = useState(`${currentYear}-12`);
+  
+  const [currentMainView, setCurrentMainView] = useState<'dashboard' | 'taskList' | 'calendar' | 'admin'>(
+    savedUIState?.currentMainView || 'dashboard'
+  );
+  const [currentView, setCurrentView] = useState<ViewType>(
+    savedUIState?.currentView || 'department'
+  );
+  const [filters, setFilters] = useState(
+    savedUIState?.filters || { team: 'team1', group: 'group1', member: 'emp01' }
+  );
+  const [filterStartMonth, setFilterStartMonth] = useState(
+    savedUIState?.filterStartMonth || `${currentYear}-01`
+  );
+  const [filterEndMonth, setFilterEndMonth] = useState(
+    savedUIState?.filterEndMonth || `${currentYear}-12`
+  );
   const [drillDownIds, setDrillDownIds] = useState<Set<string> | null>(null);
-  const [statusFilter, setStatusFilter] = useState('');
-  const [sortConfig, setSortConfig] = useState<SortConfig[]>([]);
-  const [showInactive, setShowInactive] = useState(false);
-  const [excludeCompleted, setExcludeCompleted] = useState(false);
+  const [statusFilter, setStatusFilter] = useState(savedUIState?.statusFilter || '');
+  const [sortConfig, setSortConfig] = useState<SortConfig[]>(savedUIState?.sortConfig || []);
+  const [showInactive, setShowInactive] = useState(savedUIState?.showInactive || false);
+  const [excludeCompleted, setExcludeCompleted] = useState(savedUIState?.excludeCompleted || false);
   // 검색은 입력(로컬) 후 '조회'에서 적용(taskSearchQuery)
-  const [taskSearchQuery, setTaskSearchQuery] = useState('');
+  const [taskSearchQuery, setTaskSearchQuery] = useState(savedUIState?.taskSearchQuery || '');
   // ✅ Task 목록 테이블 컬럼 넓이: 정렬/리렌더 시 초기화 방지 (App 레벨로 승격)
   // (비활성화 컬럼 + Task Code 컬럼 분리로 1칸 추가)
   // ✅ 헤더 텍스트가 잘리지 않도록 기본 폭 재조정 (합계 100)
-  const [taskTableColumnWidths, setTaskTableColumnWidths] = useState<number[]>([3, 5, 9, 9, 8, 15, 7, 7, 7, 5, 6, 5, 4, 10]);
-  const [calendarDate, setCalendarDate] = useState(new Date());
+  const [taskTableColumnWidths, setTaskTableColumnWidths] = useState<number[]>(
+    savedUIState?.taskTableColumnWidths || [3, 5, 9, 9, 8, 15, 7, 7, 7, 5, 6, 5, 4, 10]
+  );
+  const [calendarDate, setCalendarDate] = useState(
+    savedUIState?.calendarDate ? new Date(savedUIState.calendarDate) : new Date()
+  );
   const [isTaskModalOpen, setTaskModalOpen] = useState(false);
   const [isUploadModalOpen, setUploadModalOpen] = useState(false);
   const [isIssueModalOpen, setIssueModalOpen] = useState(false);
@@ -6814,13 +6939,29 @@ const App = () => {
   const [isDailyModalOpen, setDailyModalOpen] = useState(false);
   const [uploadType, setUploadType] = useState<'full' | 'hours' | null>(null);
   const [notifications, setNotifications] = useState<Notification[]>([]);
-  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(
+    savedUIState?.isSidebarCollapsed || false
+  );
   const [hasShownSetupError, setHasShownSetupError] = useState(false);
 
   // ... (App 컴포넌트 내부)
 
+  // 사용자 로그인 상태 저장 래퍼
+  const handleUserLogin = useCallback((user: UserContextType) => {
+    setCurrentUser(user);
+    saveUserToSession(user);
+  }, []);
+
+  // tasks 데이터 변경 시 자동 저장
+  useEffect(() => {
+    if (data.tasks && data.tasks.length > 0) {
+      saveTasksToLocal(data.tasks);
+    }
+  }, [data.tasks]);
+
   const handleLogoutConfirm = () => {
     setCurrentUser(null);
+    saveUserToSession(null);
     
     // [추가] 로그아웃 시 화면 상태를 '대시보드 > 실(Department)' 뷰로 초기화
     setCurrentMainView('dashboard');
@@ -10514,11 +10655,45 @@ const CalendarView = ({ tasks, currentDate, setCurrentDate, onTaskClick, onDrill
   );
 };
 
+  // UI 상태 자동 저장 (useEffect)
+  useEffect(() => {
+    const uiState: UIState = {
+      currentMainView,
+      currentView,
+      filters,
+      filterStartMonth,
+      filterEndMonth,
+      statusFilter,
+      sortConfig,
+      showInactive,
+      excludeCompleted,
+      taskSearchQuery,
+      taskTableColumnWidths,
+      calendarDate: calendarDate.toISOString(),
+      isSidebarCollapsed
+    };
+    saveUIStateToLocal(uiState);
+  }, [
+    currentMainView,
+    currentView,
+    filters,
+    filterStartMonth,
+    filterEndMonth,
+    statusFilter,
+    sortConfig,
+    showInactive,
+    excludeCompleted,
+    taskSearchQuery,
+    taskTableColumnWidths,
+    calendarDate,
+    isSidebarCollapsed
+  ]);
+
   if (!currentUser) {
     return (
       <>
         <GlobalStyles />
-        <LoginView onLogin={setCurrentUser} organization={data.organization} />
+        <LoginView onLogin={handleUserLogin} organization={data.organization} />
       </>
     );
   }
