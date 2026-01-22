@@ -17,6 +17,8 @@ const InspectionDetail: React.FC<InspectionDetailProps> = ({ record, onSave, onC
   const recognitionRef = useRef<SpeechRecognition | null>(null);
   const lastTranscriptRef = useRef<string>('');
   const processedResultsRef = useRef<Set<number>>(new Set());
+  const silenceTimerRef = useRef<number | null>(null);
+  const lastActivityRef = useRef<number>(0);
 
   useEffect(() => {
     setFormData(record);
@@ -33,6 +35,14 @@ const InspectionDetail: React.FC<InspectionDetailProps> = ({ record, onSave, onC
       recognition.lang = 'ko-KR'; // 한글 지원
 
       recognition.onresult = (event: SpeechRecognitionEvent) => {
+        // 음성 활동이 있으면 타이머 리셋
+        lastActivityRef.current = Date.now();
+        
+        // 기존 타이머 클리어
+        if (silenceTimerRef.current) {
+          clearTimeout(silenceTimerRef.current);
+        }
+
         let finalTranscript = '';
 
         // 이미 처리된 결과는 건너뛰기
@@ -62,6 +72,20 @@ const InspectionDetail: React.FC<InspectionDetailProps> = ({ record, onSave, onC
             ...prev,
             memo: (prev.memo ? prev.memo + ' ' : '') + newText
           }));
+
+          // Final 결과가 나오면 2초 후 자동 종료
+          silenceTimerRef.current = window.setTimeout(() => {
+            if (recognitionRef.current && isListening) {
+              recognitionRef.current.stop();
+            }
+          }, 2000);
+        } else {
+          // Interim 결과만 있는 경우, 3초 동안 음성이 없으면 자동 종료
+          silenceTimerRef.current = window.setTimeout(() => {
+            if (recognitionRef.current && isListening) {
+              recognitionRef.current.stop();
+            }
+          }, 3000);
         }
       };
 
@@ -80,12 +104,25 @@ const InspectionDetail: React.FC<InspectionDetailProps> = ({ record, onSave, onC
         setIsListening(false);
         // 인식이 끝나면 처리된 결과 초기화
         processedResultsRef.current.clear();
+        // 타이머 클리어
+        if (silenceTimerRef.current) {
+          clearTimeout(silenceTimerRef.current);
+          silenceTimerRef.current = null;
+        }
       };
 
       recognition.onstart = () => {
         // 새로운 인식 시작 시 초기화
         processedResultsRef.current.clear();
         lastTranscriptRef.current = '';
+        lastActivityRef.current = Date.now();
+        
+        // 5초 동안 음성이 없으면 자동 종료
+        silenceTimerRef.current = window.setTimeout(() => {
+          if (recognitionRef.current && isListening) {
+            recognitionRef.current.stop();
+          }
+        }, 5000);
       };
 
       recognitionRef.current = recognition;
@@ -97,6 +134,9 @@ const InspectionDetail: React.FC<InspectionDetailProps> = ({ record, onSave, onC
       }
       processedResultsRef.current.clear();
       lastTranscriptRef.current = '';
+      if (silenceTimerRef.current) {
+        clearTimeout(silenceTimerRef.current);
+      }
     };
   }, []);
 
@@ -111,11 +151,18 @@ const InspectionDetail: React.FC<InspectionDetailProps> = ({ record, onSave, onC
       setIsListening(false);
       processedResultsRef.current.clear();
       lastTranscriptRef.current = '';
+      if (silenceTimerRef.current) {
+        clearTimeout(silenceTimerRef.current);
+        silenceTimerRef.current = null;
+      }
     } else {
       try {
         // 초기화 후 시작
         processedResultsRef.current.clear();
         lastTranscriptRef.current = '';
+        if (silenceTimerRef.current) {
+          clearTimeout(silenceTimerRef.current);
+        }
         recognitionRef.current.start();
         setIsListening(true);
       } catch (error) {
