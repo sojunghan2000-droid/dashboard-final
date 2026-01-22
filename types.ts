@@ -34,3 +34,12 @@ export interface ReportHistory {
   status: InspectionRecord['status'];
   htmlContent: string;
 }
+
+export interface QRCodeData {
+  id: string;
+  location: string;
+  floor: string;
+  position: string;
+  qrData: string; // JSON string
+  createdAt: string;
+}
