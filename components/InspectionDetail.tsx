@@ -14,7 +14,7 @@ const InspectionDetail: React.FC<InspectionDetailProps> = ({ record, onSave, onC
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [aiMessage, setAiMessage] = useState<string | null>(null);
   const [isListening, setIsListening] = useState(false);
-  const recognitionRef = useRef<SpeechRecognition | null>(null);
+  const recognitionRef = useRef<any>(null);
   const lastTranscriptRef = useRef<string>('');
   const processedResultsRef = useRef<Set<number>>(new Set());
   const silenceTimerRef = useRef<number | null>(null);
@@ -30,17 +30,18 @@ const InspectionDetail: React.FC<InspectionDetailProps> = ({ record, onSave, onC
     if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
       const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
       const recognition = new SpeechRecognition();
-      recognition.continuous = false; // 중복 방지를 위해 false로 변경
+      recognition.continuous = false;
       recognition.interimResults = true;
-      recognition.lang = 'ko-KR'; // 한글 지원
+      recognition.lang = 'ko-KR';
 
-      recognition.onresult = (event: SpeechRecognitionEvent) => {
+      recognition.onresult = (event: any) => {
         // 음성 활동이 있으면 타이머 리셋
         lastActivityRef.current = Date.now();
         
         // 기존 타이머 클리어
         if (silenceTimerRef.current) {
           clearTimeout(silenceTimerRef.current);
+          silenceTimerRef.current = null;
         }
 
         let finalTranscript = '';
@@ -75,28 +76,50 @@ const InspectionDetail: React.FC<InspectionDetailProps> = ({ record, onSave, onC
 
           // Final 결과가 나오면 2초 후 자동 종료
           silenceTimerRef.current = window.setTimeout(() => {
-            if (recognitionRef.current && isListening) {
-              recognitionRef.current.stop();
+            if (recognitionRef.current) {
+              try {
+                recognitionRef.current.stop();
+              } catch (e) {
+                // 이미 종료된 경우 무시
+              }
             }
           }, 2000);
         } else {
           // Interim 결과만 있는 경우, 3초 동안 음성이 없으면 자동 종료
           silenceTimerRef.current = window.setTimeout(() => {
-            if (recognitionRef.current && isListening) {
-              recognitionRef.current.stop();
+            if (recognitionRef.current) {
+              try {
+                recognitionRef.current.stop();
+              } catch (e) {
+                // 이미 종료된 경우 무시
+              }
             }
           }, 3000);
         }
       };
 
-      recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
+      recognition.onerror = (event: any) => {
         console.error('Speech recognition error:', event.error);
         setIsListening(false);
         processedResultsRef.current.clear();
         lastTranscriptRef.current = '';
         
+        // 타이머 클리어
+        if (silenceTimerRef.current) {
+          clearTimeout(silenceTimerRef.current);
+          silenceTimerRef.current = null;
+        }
+        
         if (event.error === 'not-allowed') {
-          alert('Microphone permission denied. Please allow microphone access.');
+          alert('마이크 권한이 거부되었습니다. 마이크 접근을 허용해주세요.');
+        } else if (event.error === 'no-speech') {
+          // 음성이 없을 때는 에러로 처리하지 않음
+          console.log('No speech detected');
+        } else if (event.error === 'aborted') {
+          // 중단된 경우는 정상적인 종료로 처리
+          console.log('Recognition aborted');
+        } else {
+          console.error('Speech recognition error:', event.error);
         }
       };
 
@@ -117,10 +140,19 @@ const InspectionDetail: React.FC<InspectionDetailProps> = ({ record, onSave, onC
         lastTranscriptRef.current = '';
         lastActivityRef.current = Date.now();
         
+        // 기존 타이머 클리어
+        if (silenceTimerRef.current) {
+          clearTimeout(silenceTimerRef.current);
+        }
+        
         // 5초 동안 음성이 없으면 자동 종료
         silenceTimerRef.current = window.setTimeout(() => {
-          if (recognitionRef.current && isListening) {
-            recognitionRef.current.stop();
+          if (recognitionRef.current) {
+            try {
+              recognitionRef.current.stop();
+            } catch (e) {
+              // 이미 종료된 경우 무시
+            }
           }
         }, 5000);
       };
@@ -130,24 +162,33 @@ const InspectionDetail: React.FC<InspectionDetailProps> = ({ record, onSave, onC
 
     return () => {
       if (recognitionRef.current) {
-        recognitionRef.current.stop();
+        try {
+          recognitionRef.current.stop();
+        } catch (e) {
+          // 이미 종료된 경우 무시
+        }
       }
       processedResultsRef.current.clear();
       lastTranscriptRef.current = '';
       if (silenceTimerRef.current) {
         clearTimeout(silenceTimerRef.current);
+        silenceTimerRef.current = null;
       }
     };
   }, []);
 
   const toggleListening = () => {
     if (!recognitionRef.current) {
-      alert('Speech recognition is not supported in this browser.');
+      alert('이 브라우저에서는 음성 인식을 지원하지 않습니다.');
       return;
     }
 
     if (isListening) {
-      recognitionRef.current.stop();
+      try {
+        recognitionRef.current.stop();
+      } catch (error) {
+        console.error('Error stopping recognition:', error);
+      }
       setIsListening(false);
       processedResultsRef.current.clear();
       lastTranscriptRef.current = '';
@@ -157,17 +198,37 @@ const InspectionDetail: React.FC<InspectionDetailProps> = ({ record, onSave, onC
       }
     } else {
       try {
+        // 기존 타이머 클리어
+        if (silenceTimerRef.current) {
+          clearTimeout(silenceTimerRef.current);
+          silenceTimerRef.current = null;
+        }
+        
         // 초기화 후 시작
         processedResultsRef.current.clear();
         lastTranscriptRef.current = '';
-        if (silenceTimerRef.current) {
-          clearTimeout(silenceTimerRef.current);
+        
+        // 이미 실행 중이 아닌지 확인
+        try {
+          recognitionRef.current.start();
+          setIsListening(true);
+        } catch (startError: any) {
+          // 이미 실행 중인 경우 에러 무시
+          if (startError.message && startError.message.includes('already started')) {
+            console.log('Recognition already started');
+            setIsListening(true);
+          } else {
+            throw startError;
+          }
         }
-        recognitionRef.current.start();
-        setIsListening(true);
-      } catch (error) {
+      } catch (error: any) {
         console.error('Error starting speech recognition:', error);
         setIsListening(false);
+        if (error.message && error.message.includes('not-allowed')) {
+          alert('마이크 권한이 거부되었습니다. 브라우저 설정에서 마이크 접근을 허용해주세요.');
+        } else {
+          alert('음성 인식을 시작할 수 없습니다. 마이크가 연결되어 있는지 확인해주세요.');
+        }
       }
     }
   };

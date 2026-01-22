@@ -22,6 +22,7 @@ const App: React.FC = () => {
   const [currentPage, setCurrentPage] = useState<Page>('dashboard-overview');
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [showScanner, setShowScanner] = useState(false);
+  const [selectedInspectionId, setSelectedInspectionId] = useState<string | null>(null);
 
   const handleQRScanSuccess = (qrData: string) => {
     try {
@@ -173,11 +174,20 @@ const App: React.FC = () => {
               inspections={inspections}
               onUpdateInspections={setInspections}
               onScan={() => setShowScanner(true)}
+              selectedInspectionId={selectedInspectionId}
+              onSelectionChange={setSelectedInspectionId}
             />
           ) : currentPage === 'reports' ? (
             <ReportsList />
           ) : (
-            <QRGenerator />
+            <QRGenerator 
+              inspections={inspections}
+              onSelectInspection={(inspectionId) => {
+                setSelectedInspectionId(inspectionId);
+                setCurrentPage('dashboard');
+              }}
+              onUpdateInspections={setInspections}
+            />
           )}
         </main>
 

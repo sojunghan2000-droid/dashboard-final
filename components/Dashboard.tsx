@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { InspectionRecord, StatData } from '../types';
 import BoardList from './BoardList';
 import InspectionDetail from './InspectionDetail';
@@ -10,10 +10,32 @@ interface DashboardProps {
   inspections: InspectionRecord[];
   onUpdateInspections: (inspections: InspectionRecord[]) => void;
   onScan: () => void;
+  selectedInspectionId?: string | null;
+  onSelectionChange?: (id: string | null) => void;
 }
 
-const Dashboard: React.FC<DashboardProps> = ({ inspections, onUpdateInspections, onScan }) => {
+const Dashboard: React.FC<DashboardProps> = ({ 
+  inspections, 
+  onUpdateInspections, 
+  onScan,
+  selectedInspectionId,
+  onSelectionChange
+}) => {
   const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  // Sync external selectedInspectionId with internal state
+  useEffect(() => {
+    if (selectedInspectionId !== undefined) {
+      setSelectedId(selectedInspectionId);
+    }
+  }, [selectedInspectionId]);
+
+  const handleSelectId = (id: string | null) => {
+    setSelectedId(id);
+    if (onSelectionChange) {
+      onSelectionChange(id);
+    }
+  };
 
   const selectedRecord = useMemo(() => 
     inspections.find(i => i.id === selectedId) || null, 
@@ -91,7 +113,7 @@ const Dashboard: React.FC<DashboardProps> = ({ inspections, onUpdateInspections,
           <BoardList 
             items={inspections} 
             selectedId={selectedId} 
-            onSelect={setSelectedId} 
+            onSelect={handleSelectId} 
           />
         </div>
       </div>
@@ -105,7 +127,7 @@ const Dashboard: React.FC<DashboardProps> = ({ inspections, onUpdateInspections,
           <InspectionDetail 
             record={selectedRecord} 
             onSave={handleSave}
-            onCancel={() => setSelectedId(null)}
+            onCancel={() => handleSelectId(null)}
           />
         ) : (
           <div className="h-full flex flex-col items-center justify-center bg-slate-100 rounded-xl border-2 border-dashed border-slate-300 text-slate-400">
