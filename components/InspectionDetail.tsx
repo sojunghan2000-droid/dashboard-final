@@ -226,23 +226,23 @@ const InspectionDetail: React.FC<InspectionDetailProps> = ({ record, onSave, onC
           />
         </div>
 
-      </div>
+        {/* Footer Actions */}
+        <div className="pt-4 flex gap-3">
+          <button
+            onClick={onCancel}
+            className="flex-1 py-2.5 px-4 rounded-lg border border-slate-300 text-slate-700 font-medium hover:bg-white hover:shadow-sm transition-all"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={() => onSave(formData)}
+            className="flex-[2] py-2.5 px-4 rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700 shadow-md hover:shadow-lg transition-all flex justify-center items-center gap-2"
+          >
+            <Save size={18} />
+            Save & Generate Report
+          </button>
+        </div>
 
-      {/* Footer Actions */}
-      <div className="p-6 border-t border-slate-100 bg-slate-50 flex gap-3">
-        <button
-          onClick={onCancel}
-          className="flex-1 py-2.5 px-4 rounded-lg border border-slate-300 text-slate-700 font-medium hover:bg-white hover:shadow-sm transition-all"
-        >
-          Cancel
-        </button>
-        <button
-          onClick={() => onSave(formData)}
-          className="flex-[2] py-2.5 px-4 rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700 shadow-md hover:shadow-lg transition-all flex justify-center items-center gap-2"
-        >
-          <Save size={18} />
-          Save & Generate Report
-        </button>
       </div>
     </div>
   );
