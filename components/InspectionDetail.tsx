@@ -106,7 +106,7 @@ const InspectionDetail: React.FC<InspectionDetailProps> = ({ record, onSave, onC
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-6 space-y-8">
+      <div className="flex-[0.8] overflow-y-auto p-4 space-y-6">
         
         {/* Status & Date */}
         <div className="grid grid-cols-2 gap-6">
@@ -189,7 +189,7 @@ const InspectionDetail: React.FC<InspectionDetailProps> = ({ record, onSave, onC
           
           <div className="relative group">
             {formData.photoUrl ? (
-              <div className="relative rounded-xl overflow-hidden border border-slate-200 bg-slate-100 aspect-video">
+              <div className="relative rounded-xl overflow-hidden border border-slate-200 bg-slate-100 aspect-[32/9]">
                 <img src={formData.photoUrl} alt="Inspection Site" className="w-full h-full object-cover" />
                 <button 
                   onClick={() => setFormData(prev => ({ ...prev, photoUrl: null }))}

@@ -1,69 +1,33 @@
-import React, { useState, useMemo } from 'react';
-import { InspectionRecord, StatData } from './types';
-import BoardList from './components/BoardList';
-import InspectionDetail from './components/InspectionDetail';
-import StatsChart from './components/StatsChart';
-import { LayoutDashboard, ScanLine, Search, Bell, Menu, ShieldCheck, ClipboardList } from 'lucide-react';
-import { generateReport } from './services/reportService';
+import React, { useState } from 'react';
+import { InspectionRecord } from './types';
+import Dashboard from './components/Dashboard';
+import DashboardOverview from './components/DashboardOverview';
+import ReportsList from './components/ReportsList';
+import { LayoutDashboard, ScanLine, Bell, Menu, ShieldCheck, ClipboardList, BarChart3 } from 'lucide-react';
 
 const MOCK_DATA: InspectionRecord[] = [
-  { id: 'DB-A-001', status: 'Complete', lastInspectionDate: '2024-05-20 09:30', loads: { welder: true, grinder: false, light: true, pump: false }, photoUrl: 'https://picsum.photos/400/300?random=1', memo: 'All connections secure.' },
-  { id: 'DB-A-002', status: 'Complete', lastInspectionDate: '2024-05-20 10:15', loads: { welder: false, grinder: true, light: true, pump: false }, photoUrl: 'https://picsum.photos/400/300?random=2', memo: '' },
-  { id: 'DB-A-003', status: 'In Progress', lastInspectionDate: '2024-05-21 08:00', loads: { welder: false, grinder: false, light: true, pump: true }, photoUrl: null, memo: 'Check ground fault interrupter.' },
-  { id: 'DB-B-001', status: 'Pending', lastInspectionDate: '-', loads: { welder: false, grinder: false, light: false, pump: false }, photoUrl: null, memo: '' },
-  { id: 'DB-B-002', status: 'Pending', lastInspectionDate: '-', loads: { welder: false, grinder: false, light: false, pump: false }, photoUrl: null, memo: '' },
+  { id: 'DB-A-001', status: 'Complete', lastInspectionDate: '2024-05-20 09:30', loads: { welder: true, grinder: false, light: true, pump: false }, photoUrl: 'https://picsum.photos/400/300?random=1', memo: 'All connections secure.', position: { x: 25, y: 30 } },
+  { id: 'DB-A-002', status: 'Complete', lastInspectionDate: '2024-05-20 10:15', loads: { welder: false, grinder: true, light: true, pump: false }, photoUrl: 'https://picsum.photos/400/300?random=2', memo: '', position: { x: 75, y: 25 } },
+  { id: 'DB-A-003', status: 'In Progress', lastInspectionDate: '2024-05-21 08:00', loads: { welder: false, grinder: false, light: true, pump: true }, photoUrl: null, memo: 'Check ground fault interrupter.', position: { x: 50, y: 50 } },
+  { id: 'DB-B-001', status: 'Pending', lastInspectionDate: '-', loads: { welder: false, grinder: false, light: false, pump: false }, photoUrl: null, memo: '', position: { x: 15, y: 70 } },
+  { id: 'DB-B-002', status: 'Pending', lastInspectionDate: '-', loads: { welder: false, grinder: false, light: false, pump: false }, photoUrl: null, memo: '', position: { x: 85, y: 75 } },
 ];
+
+type Page = 'dashboard' | 'dashboard-overview' | 'reports';
 
 const App: React.FC = () => {
   const [inspections, setInspections] = useState<InspectionRecord[]>(MOCK_DATA);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [currentPage, setCurrentPage] = useState<Page>('dashboard-overview');
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [showScanner, setShowScanner] = useState(false);
-
-  // Derived state
-  const selectedRecord = useMemo(() => 
-    inspections.find(i => i.id === selectedId) || null, 
-  [inspections, selectedId]);
-
-  const stats: StatData[] = useMemo(() => {
-    const counts = inspections.reduce((acc, curr) => {
-      acc[curr.status] = (acc[curr.status] || 0) + 1;
-      return acc;
-    }, {} as Record<string, number>);
-
-    return [
-      { name: 'Complete', value: counts['Complete'] || 0, color: '#10b981' },
-      { name: 'In Progress', value: counts['In Progress'] || 0, color: '#3b82f6' },
-      { name: 'Pending', value: counts['Pending'] || 0, color: '#94a3b8' },
-    ].filter(d => d.value > 0);
-  }, [inspections]);
-
-  // Handlers
-  const handleSave = (updated: InspectionRecord) => {
-    // Update inspection record
-    const finalRecord = {
-      ...updated,
-      lastInspectionDate: updated.status === 'Complete' 
-        ? new Date().toLocaleString() 
-        : updated.lastInspectionDate
-    };
-    
-    setInspections(prev => prev.map(item => item.id === finalRecord.id ? finalRecord : item));
-    
-    // Generate and download report
-    generateReport(finalRecord);
-    
-    // Show success message
-    setTimeout(() => {
-      alert("Report generated and saved successfully!");
-    }, 500);
-  };
 
   const handleScan = () => {
     // Simulate scanning a random pending or new item
     const pending = inspections.find(i => i.status === 'Pending');
     if (pending) {
-      setSelectedId(pending.id);
+      // Switch to dashboard and select pending item
+      setCurrentPage('dashboard');
+      // Note: Dashboard will handle selection internally
     } else {
       const newId = `DB-C-00${Math.floor(Math.random() * 9) + 1}`;
       const newItem: InspectionRecord = {
@@ -75,7 +39,8 @@ const App: React.FC = () => {
         memo: 'New scan initiated via Mobile App simulation.'
       };
       setInspections(prev => [newItem, ...prev]);
-      setSelectedId(newId);
+      setCurrentPage('dashboard');
+      // Note: Dashboard will handle selection internally
     }
     setShowScanner(false);
   };
@@ -83,22 +48,56 @@ const App: React.FC = () => {
   return (
     <div className="flex h-screen bg-slate-50 text-slate-800 overflow-hidden font-sans">
       
+      {/* Sidebar Toggle Button - Always Visible */}
+      <div className="fixed left-0 top-0 z-30 p-4">
+        <div 
+          className="w-10 h-10 bg-blue-500 rounded-lg flex items-center justify-center cursor-pointer hover:bg-blue-600 transition-colors shadow-lg"
+          onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+        >
+          <ShieldCheck size={20} className="text-white" />
+        </div>
+      </div>
+
       {/* Sidebar */}
       <aside className={`${isSidebarOpen ? 'w-64' : 'w-0'} bg-slate-900 text-white transition-all duration-300 flex flex-col overflow-hidden shadow-xl z-20`}>
-        <div className="p-6 border-b border-slate-800 flex items-center gap-3">
-          <div className="w-8 h-8 bg-blue-500 rounded-lg flex items-center justify-center shrink-0">
-            <ShieldCheck size={20} className="text-white" />
+        <div className="p-6 border-b border-slate-800 flex items-center justify-end gap-3">
+          <div className="flex items-center gap-3">
+            <h1 className="font-bold text-lg tracking-tight whitespace-nowrap">SafetyGuard<span className="text-blue-400">Pro</span></h1>
           </div>
-          <h1 className="font-bold text-lg tracking-tight whitespace-nowrap">SafetyGuard<span className="text-blue-400">Pro</span></h1>
         </div>
         
         <nav className="flex-1 py-6 px-3 space-y-1">
-          <div className="px-3 py-2 bg-slate-800 rounded-lg text-white font-medium flex items-center gap-3 cursor-pointer">
-            <LayoutDashboard size={20} />
+          <div 
+            onClick={() => setCurrentPage('dashboard-overview')}
+            className={`px-3 py-2 rounded-lg font-medium flex items-center gap-3 cursor-pointer transition-colors ${
+              currentPage === 'dashboard-overview' 
+                ? 'bg-slate-800 text-white' 
+                : 'text-slate-400 hover:text-white hover:bg-slate-800'
+            }`}
+          >
+            <BarChart3 size={20} />
             Dashboard
           </div>
-          <div className="px-3 py-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg font-medium flex items-center gap-3 cursor-pointer transition-colors">
-            <ClipboardList size={20} className="opacity-70"/>
+          <div 
+            onClick={() => setCurrentPage('dashboard')}
+            className={`px-3 py-2 rounded-lg font-medium flex items-center gap-3 cursor-pointer transition-colors ${
+              currentPage === 'dashboard' 
+                ? 'bg-slate-800 text-white' 
+                : 'text-slate-400 hover:text-white hover:bg-slate-800'
+            }`}
+          >
+            <LayoutDashboard size={20} />
+            Inspection
+          </div>
+          <div 
+            onClick={() => setCurrentPage('reports')}
+            className={`px-3 py-2 rounded-lg font-medium flex items-center gap-3 cursor-pointer transition-colors ${
+              currentPage === 'reports' 
+                ? 'bg-slate-800 text-white' 
+                : 'text-slate-400 hover:text-white hover:bg-slate-800'
+            }`}
+          >
+            <ClipboardList size={20} className={currentPage === 'reports' ? '' : 'opacity-70'}/>
             Reports
           </div>
         </nav>
@@ -120,12 +119,12 @@ const App: React.FC = () => {
         {/* Topbar */}
         <header className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-6 shadow-sm z-10">
           <div className="flex items-center gap-4">
-            <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-2 hover:bg-slate-100 rounded-lg text-slate-600">
-              <Menu size={20} />
-            </button>
             <h2 className="text-lg font-semibold text-slate-800">Distribution Board Manager</h2>
           </div>
           <div className="flex items-center gap-4">
+            <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-2 hover:bg-slate-100 rounded-lg text-slate-600">
+              <Menu size={20} />
+            </button>
              <button 
               onClick={() => setShowScanner(true)}
               className="hidden md:flex bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium items-center gap-2 transition-colors shadow-sm"
@@ -140,72 +139,19 @@ const App: React.FC = () => {
           </div>
         </header>
 
-        {/* Dashboard Content */}
+        {/* Main Content */}
         <main className="flex-1 overflow-hidden p-6 relative">
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 h-full">
-            
-            {/* Left Panel: Stats & List */}
-            <div className={`
-              ${selectedId ? 'hidden lg:flex' : 'flex'} 
-              lg:col-span-4 flex-col gap-6 h-full
-            `}>
-              {/* Stats Card */}
-              <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200">
-                <h3 className="text-sm font-bold text-slate-500 uppercase tracking-wider mb-4">Inspection Status</h3>
-                <div className="flex items-center justify-between">
-                  <div className="w-1/2">
-                    <StatsChart data={stats} />
-                  </div>
-                  <div className="w-1/2 space-y-2">
-                    {stats.map(s => (
-                      <div key={s.name} className="flex justify-between items-center text-sm">
-                        <div className="flex items-center gap-2">
-                          <span className="w-3 h-3 rounded-full" style={{ backgroundColor: s.color }}></span>
-                          <span className="text-slate-600 font-medium">{s.name}</span>
-                        </div>
-                        <span className="font-bold text-slate-800">{s.value}</span>
-                      </div>
-                    ))}
-                    <div className="pt-2 mt-2 border-t border-slate-100 flex justify-between items-center text-sm">
-                      <span className="text-slate-500">Total</span>
-                      <span className="font-bold text-slate-900">{inspections.length}</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* List Component */}
-              <div className="flex-1 min-h-0">
-                <BoardList 
-                  items={inspections} 
-                  selectedId={selectedId} 
-                  onSelect={setSelectedId} 
-                />
-              </div>
-            </div>
-
-            {/* Right Panel: Detail View */}
-            <div className={`
-              ${selectedId ? 'flex' : 'hidden lg:flex'} 
-              lg:col-span-8 h-full flex-col
-            `}>
-              {selectedRecord ? (
-                <InspectionDetail 
-                  record={selectedRecord} 
-                  onSave={handleSave}
-                  onCancel={() => setSelectedId(null)}
-                />
-              ) : (
-                <div className="h-full flex flex-col items-center justify-center bg-slate-100 rounded-xl border-2 border-dashed border-slate-300 text-slate-400">
-                  <div className="w-16 h-16 bg-slate-200 rounded-full flex items-center justify-center mb-4">
-                    <Search size={32} className="text-slate-400" />
-                  </div>
-                  <p className="font-medium">Select a Distribution Board to view details</p>
-                  <p className="text-sm mt-2">Or scan a new QR code</p>
-                </div>
-              )}
-            </div>
-          </div>
+          {currentPage === 'dashboard-overview' ? (
+            <DashboardOverview inspections={inspections} />
+          ) : currentPage === 'dashboard' ? (
+            <Dashboard 
+              inspections={inspections}
+              onUpdateInspections={setInspections}
+              onScan={() => setShowScanner(true)}
+            />
+          ) : (
+            <ReportsList />
+          )}
         </main>
 
         {/* Floating Action Button (Mobile Scan) */}

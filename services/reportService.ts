@@ -1,4 +1,39 @@
-import { InspectionRecord } from '../types';
+import { InspectionRecord, ReportHistory } from '../types';
+
+const STORAGE_KEY = 'safetyguard_reports';
+
+// Save report to localStorage
+const saveReport = (record: InspectionRecord, htmlContent: string): void => {
+  const reports: ReportHistory[] = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+  const newReport: ReportHistory = {
+    id: `report-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+    reportId: `RPT-${record.id}-${new Date().toISOString().split('T')[0]}`,
+    boardId: record.id,
+    generatedAt: new Date().toISOString(),
+    status: record.status,
+    htmlContent: htmlContent
+  };
+  reports.unshift(newReport); // Add to beginning
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(reports));
+};
+
+// Get all saved reports
+export const getSavedReports = (): ReportHistory[] => {
+  return JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+};
+
+// Get report by ID
+export const getReportById = (id: string): ReportHistory | null => {
+  const reports = getSavedReports();
+  return reports.find(r => r.id === id) || null;
+};
+
+// Delete report
+export const deleteReport = (id: string): void => {
+  const reports = getSavedReports();
+  const filtered = reports.filter(r => r.id !== id);
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(filtered));
+};
 
 export const generateReport = (record: InspectionRecord): void => {
   const reportDate = new Date().toLocaleString('en-US', {
@@ -293,6 +328,9 @@ export const generateReport = (record: InspectionRecord): void => {
 </html>
   `;
 
+  // Save report to localStorage
+  saveReport(record, htmlContent);
+
   // Create a blob and download
   const blob = new Blob([htmlContent], { type: 'text/html' });
   const url = URL.createObjectURL(blob);
@@ -313,5 +351,14 @@ export const generateReport = (record: InspectionRecord): void => {
     setTimeout(() => {
       printWindow.print();
     }, 250);
+  }
+};
+
+// View report in new window
+export const viewReport = (report: ReportHistory): void => {
+  const viewWindow = window.open('', '_blank');
+  if (viewWindow) {
+    viewWindow.document.write(report.htmlContent);
+    viewWindow.document.close();
   }
 };
