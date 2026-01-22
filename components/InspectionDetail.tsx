@@ -15,6 +15,8 @@ const InspectionDetail: React.FC<InspectionDetailProps> = ({ record, onSave, onC
   const [aiMessage, setAiMessage] = useState<string | null>(null);
   const [isListening, setIsListening] = useState(false);
   const recognitionRef = useRef<SpeechRecognition | null>(null);
+  const lastTranscriptRef = useRef<string>('');
+  const processedResultsRef = useRef<Set<number>>(new Set());
 
   useEffect(() => {
     setFormData(record);
@@ -26,27 +28,39 @@ const InspectionDetail: React.FC<InspectionDetailProps> = ({ record, onSave, onC
     if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
       const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
       const recognition = new SpeechRecognition();
-      recognition.continuous = true;
+      recognition.continuous = false; // 중복 방지를 위해 false로 변경
       recognition.interimResults = true;
-      recognition.lang = 'en-US';
+      recognition.lang = 'ko-KR'; // 한글 지원
 
       recognition.onresult = (event: SpeechRecognitionEvent) => {
-        let interimTranscript = '';
         let finalTranscript = '';
 
+        // 이미 처리된 결과는 건너뛰기
         for (let i = event.resultIndex; i < event.results.length; i++) {
-          const transcript = event.results[i][0].transcript;
-          if (event.results[i].isFinal) {
-            finalTranscript += transcript + ' ';
-          } else {
-            interimTranscript += transcript;
+          // 중복 체크: 이미 처리된 인덱스는 건너뛰기
+          if (processedResultsRef.current.has(i)) {
+            continue;
+          }
+
+          const transcript = event.results[i][0].transcript.trim();
+          
+          if (event.results[i].isFinal && transcript) {
+            // 중복 방지: 마지막으로 추가된 텍스트와 동일하면 건너뛰기
+            if (transcript !== lastTranscriptRef.current) {
+              finalTranscript += transcript + ' ';
+              processedResultsRef.current.add(i);
+            }
           }
         }
 
-        if (finalTranscript) {
+        if (finalTranscript.trim()) {
+          const newText = finalTranscript.trim();
+          // 마지막 텍스트 저장
+          lastTranscriptRef.current = newText;
+          
           setFormData(prev => ({
             ...prev,
-            memo: (prev.memo ? prev.memo + ' ' : '') + finalTranscript.trim()
+            memo: (prev.memo ? prev.memo + ' ' : '') + newText
           }));
         }
       };
@@ -54,6 +68,9 @@ const InspectionDetail: React.FC<InspectionDetailProps> = ({ record, onSave, onC
       recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
         console.error('Speech recognition error:', event.error);
         setIsListening(false);
+        processedResultsRef.current.clear();
+        lastTranscriptRef.current = '';
+        
         if (event.error === 'not-allowed') {
           alert('Microphone permission denied. Please allow microphone access.');
         }
@@ -61,6 +78,14 @@ const InspectionDetail: React.FC<InspectionDetailProps> = ({ record, onSave, onC
 
       recognition.onend = () => {
         setIsListening(false);
+        // 인식이 끝나면 처리된 결과 초기화
+        processedResultsRef.current.clear();
+      };
+
+      recognition.onstart = () => {
+        // 새로운 인식 시작 시 초기화
+        processedResultsRef.current.clear();
+        lastTranscriptRef.current = '';
       };
 
       recognitionRef.current = recognition;
@@ -70,6 +95,8 @@ const InspectionDetail: React.FC<InspectionDetailProps> = ({ record, onSave, onC
       if (recognitionRef.current) {
         recognitionRef.current.stop();
       }
+      processedResultsRef.current.clear();
+      lastTranscriptRef.current = '';
     };
   }, []);
 
@@ -82,8 +109,13 @@ const InspectionDetail: React.FC<InspectionDetailProps> = ({ record, onSave, onC
     if (isListening) {
       recognitionRef.current.stop();
       setIsListening(false);
+      processedResultsRef.current.clear();
+      lastTranscriptRef.current = '';
     } else {
       try {
+        // 초기화 후 시작
+        processedResultsRef.current.clear();
+        lastTranscriptRef.current = '';
         recognitionRef.current.start();
         setIsListening(true);
       } catch (error) {
