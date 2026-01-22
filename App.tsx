@@ -4,6 +4,7 @@ import BoardList from './components/BoardList';
 import InspectionDetail from './components/InspectionDetail';
 import StatsChart from './components/StatsChart';
 import { LayoutDashboard, ScanLine, Search, Bell, Menu, ShieldCheck, ClipboardList } from 'lucide-react';
+import { generateReport } from './services/reportService';
 
 const MOCK_DATA: InspectionRecord[] = [
   { id: 'DB-A-001', status: 'Complete', lastInspectionDate: '2024-05-20 09:30', loads: { welder: true, grinder: false, light: true, pump: false }, photoUrl: 'https://picsum.photos/400/300?random=1', memo: 'All connections secure.' },
@@ -39,8 +40,23 @@ const App: React.FC = () => {
 
   // Handlers
   const handleSave = (updated: InspectionRecord) => {
-    setInspections(prev => prev.map(item => item.id === updated.id ? updated : item));
-    alert("Report generated and saved to MS Lists successfully!");
+    // Update inspection record
+    const finalRecord = {
+      ...updated,
+      lastInspectionDate: updated.status === 'Complete' 
+        ? new Date().toLocaleString() 
+        : updated.lastInspectionDate
+    };
+    
+    setInspections(prev => prev.map(item => item.id === finalRecord.id ? finalRecord : item));
+    
+    // Generate and download report
+    generateReport(finalRecord);
+    
+    // Show success message
+    setTimeout(() => {
+      alert("Report generated and saved successfully!");
+    }, 500);
   };
 
   const handleScan = () => {
