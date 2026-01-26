@@ -173,7 +173,12 @@ const QRGenerator: React.FC<QRGeneratorProps> = ({
         location: location,
         floor: floor,
         position: position,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        // InspectionRecord의 기본 정보 포함
+        panelNo: inspection.panelNo,
+        projectName: inspection.projectName,
+        contractor: inspection.contractor,
+        managementNumber: inspection.managementNumber
       });
 
       const newQRCode: QRCodeData = {

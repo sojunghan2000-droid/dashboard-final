@@ -1,4 +1,5 @@
 import { InspectionRecord, ReportHistory } from '../types';
+import * as XLSX from 'xlsx';
 
 const STORAGE_KEY = 'safetyguard_reports';
 
@@ -20,12 +21,9 @@ const saveReport = (record: InspectionRecord, htmlContent: string): void => {
 // ID에서 "1st"를 "F1"으로 변경하는 함수
 const migrateIdFloor = (id: string): string => {
   if (id && typeof id === 'string') {
-    // DB-1st-001 -> DB-F1-001 형식으로 변경
-    // 모든 경우를 처리: DB-1st-001, DB-1st-002 등
     if (id.includes('-1st-')) {
       return id.replace(/-1st-/g, '-F1-');
     }
-    // DB-1st-로 시작하는 경우도 처리
     if (id.startsWith('DB-1st-')) {
       return id.replace(/^DB-1st-/, 'DB-F1-');
     }
@@ -38,17 +36,14 @@ const migrateReports = (reports: ReportHistory[]): ReportHistory[] => {
   return reports.map(report => {
     const migrated: ReportHistory = { ...report };
     
-    // boardId 마이그레이션
     if (migrated.boardId) {
       migrated.boardId = migrateIdFloor(migrated.boardId);
     }
     
-    // reportId 마이그레이션 (RPT-DB-1st-001-2026-01-23 형식)
     if (migrated.reportId && migrated.reportId.includes('1st')) {
       migrated.reportId = migrateIdFloor(migrated.reportId);
     }
     
-    // htmlContent 내부의 ID도 마이그레이션
     if (migrated.htmlContent && migrated.htmlContent.includes('1st')) {
       migrated.htmlContent = migrated.htmlContent.replace(/DB-1st-/g, 'DB-F1-');
     }
@@ -62,7 +57,6 @@ export const getSavedReports = (): ReportHistory[] => {
   const reports = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
   const migrated = migrateReports(reports);
   
-  // 마이그레이션된 데이터를 localStorage에 저장
   if (JSON.stringify(reports) !== JSON.stringify(migrated)) {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(migrated));
@@ -87,206 +81,291 @@ export const deleteReport = (id: string): void => {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(filtered));
 };
 
+// Excel 파일 생성 함수
+export const generateExcelReport = (record: InspectionRecord): void => {
+  const wb = XLSX.utils.book_new();
+
+  // 기본 정보 행
+  const basicInfoRows: any[][] = [
+    ['공사용 가설 분전반', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '가설 전기 점검'],
+    [],
+    ['PNL NO.', record.panelNo || record.id, '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
+    ['PJT명', record.projectName || '', '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
+    ['시공사', record.contractor || '', '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
+    ['관리번호 (판넬명)', record.managementNumber || record.id, '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
+    ['점검자', (record.inspectors || []).join(', ') || '', '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
+    [],
+  ];
+
+  // 차단기 정보 헤더
+  const breakerHeader = [
+    '차단기 No.',
+    '구분 (1차, 2차)',
+    '차단기 용량[A]',
+    '부하명 (고정부하, 이동부하X)',
+    '형식',
+    '종류 (MCCB, ELB)',
+    '전류 (A) (후크메가)',
+    '',
+    '',
+    '',
+    '부하 용량[W]',
+    '',
+    '',
+    '',
+    '접지 (외관 점검)',
+    '상태',
+    '비고'
+  ];
+
+  const breakerSubHeader = [
+    '', '', '', '', '', '',
+    'L1', 'L2', 'L3',
+    'R', 'S', 'T', 'N',
+    '', '', '', ''
+  ];
+
+  // 차단기 데이터
+  const breakerRows: any[][] = [breakerHeader, breakerSubHeader];
+  
+  (record.breakers || []).forEach((breaker, index) => {
+    breakerRows.push([
+      breaker.breakerNo || (index + 1).toString(),
+      breaker.category || '1차',
+      breaker.breakerCapacity || 0,
+      breaker.loadName || '',
+      breaker.type || '',
+      breaker.kind || 'MCCB',
+      breaker.currentL1 || 0,
+      breaker.currentL2 || 0,
+      breaker.currentL3 || 0,
+      breaker.loadCapacityR || 0,
+      breaker.loadCapacityS || 0,
+      breaker.loadCapacityT || 0,
+      breaker.loadCapacityN || 0,
+      '',
+      record.grounding || '미점검',
+      record.status === 'Complete' ? '양호' : record.status === 'In Progress' ? '점검 중' : '미점검',
+      ''
+    ]);
+  });
+
+  // 열화상 측정 섹션
+  const thermalRows: any[][] = [
+    [],
+    ['열화상 측정 (측정기 : ' + (record.thermalImage?.equipment || 'KT-352') + ')', '', '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
+    ['점검 내용', '변대/가설분전반 전류 및 발열', '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
+  ];
+
+  // 부하 합계 정보
+  const summaryRows: any[][] = [
+    [],
+    ['상별 부하 합계 [AV]', record.loadSummary?.phaseLoadSumA || 0, record.loadSummary?.phaseLoadSumB || 0, record.loadSummary?.phaseLoadSumC || 0, '', '', '', '', '', '', '', '', '', '', '', ''],
+    ['총 연결 부하 합계[AV]', record.loadSummary?.totalLoadSum || 0, '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
+    ['상별 부하 분담 [%]', record.loadSummary?.phaseLoadShareA || 0, record.loadSummary?.phaseLoadShareB || 0, record.loadSummary?.phaseLoadShareC || 0, '', '', '', '', '', '', '', '', '', '', '', ''],
+  ];
+
+  // 모든 행 결합
+  const allRows = [
+    ...basicInfoRows,
+    ...breakerRows,
+    ...thermalRows,
+    ...summaryRows
+  ];
+
+  const ws = XLSX.utils.aoa_to_sheet(allRows);
+
+  // 열 너비 설정
+  ws['!cols'] = [
+    { wch: 12 }, // 차단기 No.
+    { wch: 12 }, // 구분
+    { wch: 12 }, // 차단기 용량
+    { wch: 30 }, // 부하명
+    { wch: 10 }, // 형식
+    { wch: 12 }, // 종류
+    { wch: 10 }, // L1
+    { wch: 10 }, // L2
+    { wch: 10 }, // L3
+    { wch: 10 }, // R
+    { wch: 10 }, // S
+    { wch: 10 }, // T
+    { wch: 10 }, // N
+    { wch: 15 }, // 접지
+    { wch: 10 }, // 상태
+    { wch: 20 }, // 비고
+    { wch: 20 }  // 추가 열
+  ];
+
+  // 셀 병합 및 스타일 설정
+  const merges: XLSX.Range[] = [];
+  
+  // 헤더 병합
+  merges.push({ s: { r: 0, c: 0 }, e: { r: 0, c: 14 } }); // 공사용 가설 분전반
+  merges.push({ s: { r: 0, c: 15 }, e: { r: 0, c: 15 } }); // 가설 전기 점검
+  
+  // 기본 정보 행 병합
+  merges.push({ s: { r: 2, c: 1 }, e: { r: 2, c: 15 } }); // PNL NO. 값
+  merges.push({ s: { r: 3, c: 1 }, e: { r: 3, c: 15 } }); // PJT명 값
+  merges.push({ s: { r: 4, c: 1 }, e: { r: 4, c: 15 } }); // 시공사 값
+  merges.push({ s: { r: 5, c: 1 }, e: { r: 5, c: 15 } }); // 관리번호 값
+  merges.push({ s: { r: 6, c: 1 }, e: { r: 6, c: 15 } }); // 점검자 값
+
+  // 전류 헤더 병합
+  const breakerHeaderRow = basicInfoRows.length;
+  merges.push({ s: { r: breakerHeaderRow, c: 6 }, e: { r: breakerHeaderRow, c: 8 } }); // 전류 (A) (후크메가)
+  
+  // 부하 용량 헤더 병합
+  merges.push({ s: { r: breakerHeaderRow, c: 10 }, e: { r: breakerHeaderRow, c: 13 } }); // 부하 용량[W]
+
+  ws['!merges'] = merges;
+
+  XLSX.utils.book_append_sheet(wb, ws, '점검 보고서');
+
+  // 파일 다운로드
+  const fileName = `가설전기점검_${record.id}_${new Date().toISOString().split('T')[0]}.xlsx`;
+  XLSX.writeFile(wb, fileName);
+};
+
 export const generateReport = (record: InspectionRecord): void => {
   // In Progress 상태는 리포트 생성하지 않음
   if (record.status === 'In Progress') {
     return;
   }
 
-  const reportDate = new Date().toLocaleString('en-US', {
+  const reportDate = new Date().toLocaleString('ko-KR', {
     year: 'numeric',
-    month: 'long',
-    day: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
     hour: '2-digit',
     minute: '2-digit'
   });
 
-  const connectedLoads = Object.entries(record.loads)
-    .filter(([_, connected]) => connected)
-    .map(([key, _]) => {
-      const labels: Record<string, string> = {
-        welder: 'Welder',
-        grinder: 'Grinder',
-        light: 'Temporary Light',
-        pump: 'Water Pump'
-      };
-      return labels[key] || key;
-    })
-    .join(', ') || 'None';
+  // Excel 파일 생성
+  generateExcelReport(record);
 
-  const statusColors: Record<string, string> = {
-    'Complete': '#10b981',
-    'In Progress': '#3b82f6',
-    'Pending': '#94a3b8'
-  };
-
+  // HTML Report 생성 (사진의 엑셀 보고서 형태)
   const htmlContent = `
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ko">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Inspection Report - ${record.id}</title>
+  <title>가설 전기 점검 보고서 - ${record.id}</title>
   <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
     * {
       margin: 0;
       padding: 0;
       box-sizing: border-box;
     }
     body {
-      font-family: 'Inter', sans-serif;
-      background: #f3f4f6;
-      padding: 40px 20px;
-      color: #1f2937;
+      font-family: 'Malgun Gothic', '맑은 고딕', Arial, sans-serif;
+      background: #f5f5f5;
+      padding: 20px;
+      color: #000;
     }
     .report-container {
-      max-width: 800px;
+      max-width: 1200px;
       margin: 0 auto;
       background: white;
-      border-radius: 12px;
-      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-      overflow: hidden;
+      padding: 20px;
     }
-    .header {
-      background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
-      color: white;
-      padding: 40px;
-      text-align: center;
+    .header-section {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+      padding: 15px;
+      background: #e8f5e9;
+      border: 2px solid #4caf50;
     }
-    .header h1 {
-      font-size: 28px;
-      font-weight: 700;
-      margin-bottom: 8px;
-    }
-    .header .subtitle {
-      font-size: 14px;
-      opacity: 0.9;
-      font-weight: 400;
-    }
-    .content {
-      padding: 40px;
-    }
-    .section {
-      margin-bottom: 32px;
-    }
-    .section:last-child {
-      margin-bottom: 0;
-    }
-    .section-title {
+    .header-left {
       font-size: 18px;
-      font-weight: 600;
-      color: #1e293b;
-      margin-bottom: 16px;
-      padding-bottom: 8px;
-      border-bottom: 2px solid #e2e8f0;
+      font-weight: bold;
+      color: #2e7d32;
     }
-    .info-grid {
+    .header-right {
+      font-size: 18px;
+      font-weight: bold;
+      color: #2e7d32;
+    }
+    .basic-info {
       display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 20px;
-      margin-bottom: 24px;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 15px;
+      margin-bottom: 20px;
+      padding: 15px;
+      background: #f1f8e9;
+      border: 1px solid #8bc34a;
     }
     .info-item {
       display: flex;
       flex-direction: column;
     }
     .info-label {
-      font-size: 12px;
-      font-weight: 500;
-      color: #64748b;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-      margin-bottom: 4px;
+      font-size: 11px;
+      font-weight: bold;
+      color: #558b2f;
+      margin-bottom: 5px;
     }
     .info-value {
-      font-size: 16px;
-      font-weight: 600;
-      color: #1e293b;
-    }
-    .status-badge {
-      display: inline-block;
-      padding: 6px 12px;
-      border-radius: 6px;
       font-size: 14px;
-      font-weight: 600;
-      color: white;
+      color: #000;
     }
-    .loads-list {
-      display: grid;
-      grid-template-columns: repeat(2, 1fr);
-      gap: 12px;
-    }
-    .load-item {
-      display: flex;
-      align-items: center;
-      padding: 12px;
-      background: #f8fafc;
-      border-radius: 8px;
-      border: 1px solid #e2e8f0;
-    }
-    .load-item.connected {
-      background: #eff6ff;
-      border-color: #3b82f6;
-    }
-    .load-check {
-      width: 20px;
-      height: 20px;
-      border-radius: 4px;
-      background: #cbd5e1;
-      margin-right: 12px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-    .load-item.connected .load-check {
-      background: #3b82f6;
-    }
-    .load-check::after {
-      content: '✓';
-      color: white;
-      font-size: 14px;
-      font-weight: bold;
-      display: none;
-    }
-    .load-item.connected .load-check::after {
-      display: block;
-    }
-    .photo-section {
-      margin-top: 16px;
-    }
-    .photo-container {
+    .breaker-table {
       width: 100%;
-      max-height: 400px;
-      border-radius: 8px;
-      overflow: hidden;
-      border: 1px solid #e2e8f0;
-      margin-top: 12px;
+      border-collapse: collapse;
+      margin-bottom: 20px;
+      font-size: 11px;
     }
-    .photo-container img {
+    .breaker-table th,
+    .breaker-table td {
+      border: 1px solid #ccc;
+      padding: 8px 4px;
+      text-align: center;
+    }
+    .breaker-table th {
+      background: #e3f2fd;
+      font-weight: bold;
+      font-size: 10px;
+    }
+    .breaker-table .sub-header {
+      background: #f5f5f5;
+      font-size: 9px;
+    }
+    .thermal-section {
+      margin: 20px 0;
+      padding: 15px;
+      background: #fff3e0;
+      border: 1px solid #ff9800;
+    }
+    .thermal-title {
+      font-weight: bold;
+      margin-bottom: 10px;
+    }
+    .thermal-image {
+      max-width: 300px;
+      margin-top: 10px;
+    }
+    .thermal-image img {
       width: 100%;
       height: auto;
-      display: block;
+      border: 1px solid #ccc;
     }
-    .memo-section {
-      background: #f8fafc;
-      padding: 20px;
-      border-radius: 8px;
-      border-left: 4px solid #3b82f6;
+    .summary-section {
+      margin-top: 20px;
+      padding: 15px;
+      background: #f5f5f5;
+      border: 1px solid #9e9e9e;
     }
-    .memo-text {
-      font-size: 14px;
-      line-height: 1.6;
-      color: #475569;
-      white-space: pre-wrap;
-    }
-    .footer {
-      background: #f8fafc;
-      padding: 24px 40px;
-      text-align: center;
-      border-top: 1px solid #e2e8f0;
-      color: #64748b;
+    .summary-row {
+      display: flex;
+      gap: 20px;
+      margin-bottom: 8px;
       font-size: 12px;
+    }
+    .summary-label {
+      font-weight: bold;
+      min-width: 150px;
     }
     @media print {
       body {
@@ -301,84 +380,126 @@ export const generateReport = (record: InspectionRecord): void => {
 </head>
 <body>
   <div class="report-container">
-    <div class="header">
-      <h1>SafetyGuard Pro</h1>
-      <div class="subtitle">Distribution Board Inspection Report</div>
-    </div>
-    
-    <div class="content">
-      <div class="section">
-        <div class="info-grid">
-          <div class="info-item">
-            <div class="info-label">Distribution Board ID</div>
-            <div class="info-value">${record.id}</div>
-          </div>
-          <div class="info-item">
-            <div class="info-label">Inspection Status</div>
-            <div>
-              <span class="status-badge" style="background-color: ${statusColors[record.status]}">
-                ${record.status}
-              </span>
-            </div>
-          </div>
-          <div class="info-item">
-            <div class="info-label">Last Inspection Date</div>
-            <div class="info-value">${record.lastInspectionDate}</div>
-          </div>
-          <div class="info-item">
-            <div class="info-label">Report Generated</div>
-            <div class="info-value">${reportDate}</div>
-          </div>
-        </div>
-      </div>
-
-      <div class="section">
-        <div class="section-title">Connected Loads</div>
-        <div class="loads-list">
-          <div class="load-item ${record.loads.welder ? 'connected' : ''}">
-            <div class="load-check"></div>
-            <span>Welder</span>
-          </div>
-          <div class="load-item ${record.loads.grinder ? 'connected' : ''}">
-            <div class="load-check"></div>
-            <span>Grinder</span>
-          </div>
-          <div class="load-item ${record.loads.light ? 'connected' : ''}">
-            <div class="load-check"></div>
-            <span>Temporary Light</span>
-          </div>
-          <div class="load-item ${record.loads.pump ? 'connected' : ''}">
-            <div class="load-check"></div>
-            <span>Water Pump</span>
-          </div>
-        </div>
-        <div style="margin-top: 12px; font-size: 14px; color: #64748b;">
-          <strong>Active Loads:</strong> ${connectedLoads}
-        </div>
-      </div>
-
-      ${record.photoUrl ? `
-      <div class="section photo-section">
-        <div class="section-title">Site Photo</div>
-        <div class="photo-container">
-          <img src="${record.photoUrl}" alt="Inspection Site Photo" />
-        </div>
-      </div>
-      ` : ''}
-
-      ${record.memo ? `
-      <div class="section">
-        <div class="section-title">Observations & Actions</div>
-        <div class="memo-section">
-          <div class="memo-text">${record.memo}</div>
-        </div>
-      </div>
-      ` : ''}
+    <div class="header-section">
+      <div class="header-left">공사용 가설 분전반</div>
+      <div class="header-right">가설 전기 점검</div>
     </div>
 
-    <div class="footer">
-      <p>This report was generated by SafetyGuard Pro Inspection System</p>
-      <p style="margin-top: 4px;">© ${new Date().getFullYear()} SafetyGuard Pro. All rights reserved.</p>
+    <div class="basic-info">
+      <div class="info-item">
+        <div class="info-label">PNL NO.</div>
+        <div class="info-value">${record.panelNo || record.id || ''}</div>
+      </div>
+      <div class="info-item">
+        <div class="info-label">PJT명</div>
+        <div class="info-value">${record.projectName || ''}</div>
+      </div>
+      <div class="info-item">
+        <div class="info-label">시공사</div>
+        <div class="info-value">${record.contractor || ''}</div>
+      </div>
+      <div class="info-item">
+        <div class="info-label">관리번호 (판넬명)</div>
+        <div class="info-value">${record.managementNumber || record.id || ''}</div>
+      </div>
+    </div>
+
+    <div class="basic-info">
+      <div class="info-item" style="grid-column: 1 / -1;">
+        <div class="info-label">점검자</div>
+        <div class="info-value">${(record.inspectors || []).join(', ') || ''}</div>
+      </div>
+    </div>
+
+    <table class="breaker-table">
+      <thead>
+        <tr>
+          <th rowspan="2">차단기 No.</th>
+          <th rowspan="2">구분<br>(1차, 2차)</th>
+          <th rowspan="2">차단기<br>용량[A]</th>
+          <th rowspan="2">부하명<br>(고정부하, 이동부하X)</th>
+          <th rowspan="2">형식</th>
+          <th rowspan="2">종류<br>(MCCB, ELB)</th>
+          <th colspan="3">전류 (A)<br>(후크메가)</th>
+          <th colspan="4">부하 용량[W]</th>
+          <th rowspan="2">접지<br>(외관 점검)</th>
+          <th rowspan="2">상태</th>
+          <th rowspan="2">비고</th>
+        </tr>
+        <tr class="sub-header">
+          <th>L1</th>
+          <th>L2</th>
+          <th>L3</th>
+          <th>R</th>
+          <th>S</th>
+          <th>T</th>
+          <th>N</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${(record.breakers || []).map((breaker, index) => `
+        <tr>
+          <td>${breaker.breakerNo || (index + 1)}</td>
+          <td>${breaker.category || '1차'}</td>
+          <td>${breaker.breakerCapacity || 0}</td>
+          <td>${breaker.loadName || ''}</td>
+          <td>${breaker.type || ''}</td>
+          <td>${breaker.kind || 'MCCB'}</td>
+          <td>${breaker.currentL1 || 0}</td>
+          <td>${breaker.currentL2 || 0}</td>
+          <td>${breaker.currentL3 || 0}</td>
+          <td>${breaker.loadCapacityR || 0}</td>
+          <td>${breaker.loadCapacityS || 0}</td>
+          <td>${breaker.loadCapacityT || 0}</td>
+          <td>${breaker.loadCapacityN || 0}</td>
+          <td>${record.grounding || '미점검'}</td>
+          <td>${record.status === 'Complete' ? '양호' : record.status === 'In Progress' ? '점검 중' : '미점검'}</td>
+          <td></td>
+        </tr>
+        `).join('')}
+        ${(record.breakers || []).length === 0 ? '<tr><td colspan="16" style="text-align: center; padding: 20px;">차단기 정보가 없습니다.</td></tr>' : ''}
+      </tbody>
+    </table>
+
+    <div class="thermal-section">
+      <div class="thermal-title">열화상 측정 (측정기 : ${record.thermalImage?.equipment || 'KT-352'})</div>
+      <div style="margin-top: 5px; font-size: 11px;">점검 내용 : 변대/가설분전반 전류 및 발열</div>
+      ${record.thermalImage?.imageUrl ? `
+      <div class="thermal-image">
+        <img src="${record.thermalImage.imageUrl}" alt="열화상 이미지" />
+        <div style="margin-top: 5px; font-size: 10px;">
+          온도: ${record.thermalImage.temperature || 0}°C | 
+          최대: ${record.thermalImage.maxTemp || 0}°C | 
+          최소: ${record.thermalImage.minTemp || 0}°C | 
+          방사율: e=${record.thermalImage.emissivity || 0.95} | 
+          측정시간: ${record.thermalImage.measurementTime || ''}
+        </div>
+      </div>
+      ` : '<div style="margin-top: 10px; color: #999;">열화상 이미지 없음</div>'}
+    </div>
+
+    <div class="summary-section">
+      <div class="summary-row">
+        <span class="summary-label">상별 부하 합계 [AV]</span>
+        <span>A: ${record.loadSummary?.phaseLoadSumA || 0}</span>
+        <span>B: ${record.loadSummary?.phaseLoadSumB || 0}</span>
+        <span>C: ${record.loadSummary?.phaseLoadSumC || 0}</span>
+      </div>
+      <div class="summary-row">
+        <span class="summary-label">총 연결 부하 합계[AV]</span>
+        <span>${record.loadSummary?.totalLoadSum || 0}</span>
+      </div>
+      <div class="summary-row">
+        <span class="summary-label">상별 부하 분담 [%]</span>
+        <span>A: ${record.loadSummary?.phaseLoadShareA || 0}%</span>
+        <span>B: ${record.loadSummary?.phaseLoadShareB || 0}%</span>
+        <span>C: ${record.loadSummary?.phaseLoadShareC || 0}%</span>
+      </div>
+    </div>
+
+    <div style="margin-top: 30px; padding: 15px; text-align: center; font-size: 11px; color: #666; border-top: 1px solid #ddd;">
+      <p>점검일: ${record.lastInspectionDate || ''}</p>
+      <p style="margin-top: 5px;">보고서 생성일: ${reportDate}</p>
     </div>
   </div>
 </body>
@@ -388,7 +509,7 @@ export const generateReport = (record: InspectionRecord): void => {
   // Save report to localStorage
   saveReport(record, htmlContent);
 
-  // Open report in new window (no auto-download, no auto-print)
+  // Open report in new window
   const reportWindow = window.open('', '_blank');
   if (reportWindow) {
     reportWindow.document.write(htmlContent);
@@ -402,5 +523,18 @@ export const viewReport = (report: ReportHistory): void => {
   if (viewWindow) {
     viewWindow.document.write(report.htmlContent);
     viewWindow.document.close();
+  }
+};
+
+// Export report to Excel
+export const exportReportToExcel = (report: ReportHistory): void => {
+  // report.boardId로 InspectionRecord 찾기
+  const inspections: InspectionRecord[] = JSON.parse(localStorage.getItem('safetyguard_inspections') || '[]');
+  const record = inspections.find(i => i.id === report.boardId);
+  
+  if (record) {
+    generateExcelReport(record);
+  } else {
+    alert('해당 분전반 정보를 찾을 수 없습니다.');
   }
 };

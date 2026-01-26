@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { ReportHistory } from '../types';
-import { getSavedReports, viewReport, deleteReport } from '../services/reportService';
-import { FileText, Eye, Trash2, Calendar, CheckCircle2, Clock, AlertCircle, Search } from 'lucide-react';
+import { getSavedReports, viewReport, deleteReport, exportReportToExcel } from '../services/reportService';
+import { FileText, Eye, Trash2, Calendar, CheckCircle2, Clock, AlertCircle, Search, Download } from 'lucide-react';
 
 const ReportsList: React.FC = () => {
   const [reports, setReports] = useState<ReportHistory[]>([]);
@@ -34,6 +34,11 @@ const ReportsList: React.FC = () => {
 
   const handleViewReport = (report: ReportHistory) => {
     viewReport(report);
+  };
+
+  const handleExportExcel = (report: ReportHistory, e: React.MouseEvent) => {
+    e.stopPropagation();
+    exportReportToExcel(report);
   };
 
   const handleDeleteReport = (id: string, e: React.MouseEvent) => {
@@ -148,6 +153,13 @@ const ReportsList: React.FC = () => {
                       <span className={`px-2 py-1 rounded text-xs font-medium border ${getStatusColor(report.status)}`}>
                         {report.status}
                       </span>
+                      <button
+                        onClick={(e) => handleExportExcel(report, e)}
+                        className="p-1.5 hover:bg-green-50 rounded text-slate-400 hover:text-green-600 transition-colors"
+                        title="Excel로 다운로드"
+                      >
+                        <Download size={16} />
+                      </button>
                       <button
                         onClick={(e) => handleDeleteReport(report.id, e)}
                         className="p-1.5 hover:bg-red-50 rounded text-slate-400 hover:text-red-600 transition-colors"

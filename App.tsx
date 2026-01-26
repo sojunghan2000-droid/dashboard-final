@@ -228,18 +228,24 @@ const App: React.FC = () => {
       }
       
       // 스캔 시간 생성 (YYYY-MM-DD HH:mm 형식)
-      const scanTime = new Date().toLocaleString('ko-KR', {
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-        hour12: false
-      }).replace(/\. /g, '-').replace(/\./g, '').replace(/,/g, '');
+      const now = new Date();
+      const scanTime = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
 
-      // QR 코드에서 ID 찾기 (data.id 또는 data.raw에서 추출)
+      // QR 코드에서 ID 찾기
       const qrId = data.id || (data.raw && data.raw.includes('DB-') ? data.raw.split('DB-')[1]?.split('-')[0] : null) || data.raw || 'UNKNOWN';
       
+      // 저장된 QRCodeData에서 추가 정보 찾기
+      const STORAGE_KEY_QR = 'safetyguard_qrcodes';
+      const savedQRCodes: any[] = JSON.parse(localStorage.getItem(STORAGE_KEY_QR) || '[]');
+      const matchedQR = savedQRCodes.find((qr: any) => {
+        try {
+          const qrDataObj = JSON.parse(qr.qrData || '{}');
+          return qrDataObj.id === qrId || qr.id === qrId;
+        } catch {
+          return qr.id === qrId;
+        }
+      });
+
       // 기존 보드 찾기 (ID 기준)
       const existingBoard = inspections.find(i => i.id === qrId || i.id.includes(qrId));
 
@@ -247,11 +253,12 @@ const App: React.FC = () => {
         // 기존 보드 업데이트 - QR 정보 반영
         const updatedBoard: InspectionRecord = {
           ...existingBoard,
-          lastInspectionDate: scanTime, // 스캔 시간으로 자동 업데이트
-          panelNo: data.panelNo || data.pnlNo || existingBoard.panelNo,
-          projectName: data.projectName || data.pjtName || data.pjt || existingBoard.projectName,
-          contractor: data.contractor || data.시공사 || existingBoard.contractor,
-          managementNumber: data.managementNumber || data.관리번호 || data.panelName || existingBoard.managementNumber,
+          lastInspectionDate: scanTime, // QR 스캔 시간으로 자동 업데이트
+          // QR 데이터에서 정보 가져오기 (우선순위: QR 데이터 > 기존 값)
+          panelNo: data.panelNo || data.pnlNo || existingBoard.panelNo || (matchedQR ? `PNL NO. ${qrId}` : undefined),
+          projectName: data.projectName || data.pjtName || data.pjt || existingBoard.projectName || '',
+          contractor: data.contractor || data.시공사 || existingBoard.contractor || '',
+          managementNumber: data.managementNumber || data.관리번호 || data.panelName || existingBoard.managementNumber || qrId,
         };
         
         setInspections(prev => prev.map(item => item.id === existingBoard.id ? updatedBoard : item));
@@ -264,7 +271,7 @@ const App: React.FC = () => {
         const newItem: InspectionRecord = {
           id: newId,
           status: 'In Progress',
-          lastInspectionDate: scanTime, // 스캔 시간으로 설정
+          lastInspectionDate: scanTime, // QR 스캔 시간으로 설정
           loads: { welder: false, grinder: false, light: false, pump: false },
           photoUrl: null,
           memo: '',
