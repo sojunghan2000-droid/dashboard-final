@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { InspectionRecord } from './types';
 import Dashboard from './components/Dashboard';
 import DashboardOverview from './components/DashboardOverview';
@@ -28,6 +28,27 @@ const MOCK_DATA: InspectionRecord[] = [
 type Page = 'dashboard' | 'dashboard-overview' | 'reports' | 'qr-generator';
 
 const STORAGE_KEY_INSPECTIONS = 'safetyguard_inspections';
+
+// 유틸리티 함수: 날짜 포맷팅 (YYYY-MM-DD hh:mm:ss)
+const formatDateTime = (date: Date = new Date()): string => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  const seconds = String(date.getSeconds()).padStart(2, '0');
+  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+};
+
+// 유틸리티 함수: position이 없는 항목에 기본 위치 추가
+const ensurePosition = (item: InspectionRecord): InspectionRecord => {
+  if (!item.position) {
+    const randomX = Math.floor(Math.random() * 80) + 10;
+    const randomY = Math.floor(Math.random() * 80) + 10;
+    return { ...item, position: { x: randomX, y: randomY } };
+  }
+  return item;
+};
 
 // ID에서 "1st"를 "F1"으로 변경하는 함수
 const migrateIdFloor = (id: string): string => {
@@ -101,14 +122,7 @@ const App: React.FC = () => {
         const migrated = migrateFloorFormat(parsed);
         
         // position이 없는 항목들에 기본 위치 정보 추가
-        const result = migrated.map((item: InspectionRecord) => {
-          if (!item.position) {
-            const randomX = Math.floor(Math.random() * 80) + 10;
-            const randomY = Math.floor(Math.random() * 80) + 10;
-            return { ...item, position: { x: randomX, y: randomY } };
-          }
-          return item;
-        });
+        const result = migrated.map((item: InspectionRecord) => ensurePosition(item));
         
         // 마이그레이션된 데이터를 localStorage에 저장
         try {
@@ -124,14 +138,7 @@ const App: React.FC = () => {
     }
     
     // localStorage에 없으면 MOCK_DATA 사용
-    const initialData = MOCK_DATA.map(item => {
-      if (!item.position) {
-        const randomX = Math.floor(Math.random() * 80) + 10;
-        const randomY = Math.floor(Math.random() * 80) + 10;
-        return { ...item, position: { x: randomX, y: randomY } };
-      }
-      return item;
-    });
+    const initialData = MOCK_DATA.map(item => ensurePosition(item));
     
     // localStorage에 저장
     try {
@@ -158,24 +165,17 @@ const App: React.FC = () => {
     }
   }, [inspections]);
 
-  // inspections가 업데이트될 때 position이 없는 항목들에 기본 위치 정보 추가
+  // Reports 로드 및 실시간 업데이트 (최적화: throttle 사용)
   useEffect(() => {
-    setInspections(prev => {
-      const updated = prev.map(item => {
-        if (!item.position) {
-          const randomX = Math.floor(Math.random() * 80) + 10;
-          const randomY = Math.floor(Math.random() * 80) + 10;
-          return { ...item, position: { x: randomX, y: randomY } };
-        }
-        return item;
-      });
-      return updated;
-    });
-  }, []);
-
-  // Reports 로드 및 실시간 업데이트
-  useEffect(() => {
+    let lastLoadTime = 0;
+    const THROTTLE_MS = 500; // 500ms로 throttle
+    
     const loadReports = () => {
+      const now = Date.now();
+      if (now - lastLoadTime < THROTTLE_MS) {
+        return;
+      }
+      lastLoadTime = now;
       const savedReports = getSavedReports();
       setReports(savedReports);
     };
@@ -189,7 +189,7 @@ const App: React.FC = () => {
     
     window.addEventListener('storage', handleStorageChange);
     
-    // 주기적으로 확인 (같은 탭에서의 변경 감지)
+    // throttle된 주기적 확인 (같은 탭에서의 변경 감지)
     const interval = setInterval(loadReports, 1000);
     
     return () => {
@@ -216,7 +216,7 @@ const App: React.FC = () => {
     };
   }, [showNotifications]);
 
-  const handleQRScanSuccess = (qrData: string) => {
+  const handleQRScanSuccess = useCallback((qrData: string) => {
     try {
       // QR 코드 데이터 파싱
       let data: any;
@@ -227,9 +227,8 @@ const App: React.FC = () => {
         data = { raw: qrData };
       }
       
-      // 스캔 시간 생성 (YYYY-MM-DD, hh-mm-ss 형식) - 예: 2024-05-20, 09-30-45
-      const now = new Date();
-      const scanTime = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}, ${String(now.getHours()).padStart(2, '0')}-${String(now.getMinutes()).padStart(2, '0')}-${String(now.getSeconds()).padStart(2, '0')}`;
+      // 스캔 시간 생성 (YYYY-MM-DD hh:mm:ss 형식)
+      const scanTime = formatDateTime();
 
       // QR 코드에서 ID 찾기
       const qrId = data.id || (data.raw && data.raw.includes('DB-') ? data.raw.split('DB-')[1]?.split('-')[0] : null) || data.raw || 'UNKNOWN';
@@ -297,7 +296,23 @@ const App: React.FC = () => {
       alert(`QR 코드 스캔 완료!\n데이터: ${qrData}`);
       setShowScanner(false);
     }
-  };
+  }, [inspections, setInspections, setCurrentPage, setSelectedInspectionId, setShowScanner]);
+
+  const handleScanButtonClick = useCallback(() => {
+    // QR 스캔 버튼 클릭 순간의 시간 생성
+    const scanTime = formatDateTime();
+    
+    // 현재 선택된 inspection이 있으면 점검일 업데이트
+    if (selectedInspectionId) {
+      setInspections(prev => prev.map(item => 
+        item.id === selectedInspectionId 
+          ? { ...item, lastInspectionDate: scanTime }
+          : item
+      ));
+    }
+    
+    setShowScanner(true);
+  }, [selectedInspectionId, setInspections, setShowScanner]);
 
   return (
     <div className="flex h-screen bg-slate-50 text-slate-800 overflow-hidden font-sans">
@@ -385,27 +400,7 @@ const App: React.FC = () => {
           </div>
           <div className="flex items-center gap-4">
              <button 
-              onClick={() => {
-                // QR 스캔 버튼 클릭 순간의 시간 생성 (YYYY-MM-DD, hh-mm-ss 형식)
-                const now = new Date();
-                const scanTime = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}, ${String(now.getHours()).padStart(2, '0')}-${String(now.getMinutes()).padStart(2, '0')}-${String(now.getSeconds()).padStart(2, '0')}`;
-                
-                // 현재 선택된 inspection이 있으면 점검일 업데이트
-                if (selectedInspectionId) {
-                  const selectedInspection = inspections.find(i => i.id === selectedInspectionId);
-                  if (selectedInspection) {
-                    const updatedInspection: InspectionRecord = {
-                      ...selectedInspection,
-                      lastInspectionDate: scanTime
-                    };
-                    setInspections(prev => prev.map(item => 
-                      item.id === selectedInspectionId ? updatedInspection : item
-                    ));
-                  }
-                }
-                
-                setShowScanner(true);
-              }}
+              onClick={handleScanButtonClick}
               className="hidden md:flex bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium items-center gap-2 transition-colors shadow-sm"
             >
               <ScanLine size={18} />

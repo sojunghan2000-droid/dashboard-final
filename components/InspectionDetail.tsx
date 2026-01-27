@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { InspectionRecord, Loads, BreakerInfo, ThermalImageData, LoadSummary } from '../types';
 import { Save, FileText, Camera, Upload, Sparkles, AlertCircle, CheckCircle2, Mic, MicOff, MapPin, Plus, Trash2, Thermometer } from 'lucide-react';
 import { analyzeInspectionPhoto } from '../services/geminiService';
@@ -234,6 +234,11 @@ const InspectionDetail: React.FC<InspectionDetailProps> = ({ record, onSave, onC
     };
   }, []);
 
+  // 음성 인식 필드 활성화 여부 확인 헬퍼 함수
+  const isFieldListening = useCallback((fieldId: string): boolean => {
+    return isListening && activeVoiceField === fieldId;
+  }, [isListening, activeVoiceField]);
+
   const toggleListening = (fieldId?: string) => {
     if (!recognitionRef.current) {
       alert('이 브라우저에서는 음성 인식을 지원하지 않습니다.');
@@ -315,7 +320,7 @@ const InspectionDetail: React.FC<InspectionDetailProps> = ({ record, onSave, onC
     }
   };
 
-  const handleLoadChange = (key: keyof Loads) => {
+  const handleLoadChange = useCallback((key: keyof Loads) => {
     setFormData(prev => ({
       ...prev,
       loads: {
@@ -323,57 +328,57 @@ const InspectionDetail: React.FC<InspectionDetailProps> = ({ record, onSave, onC
         [key]: !prev.loads[key]
       }
     }));
-  };
+  }, []);
 
-  const handleMemoChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+  const handleMemoChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setFormData(prev => ({ ...prev, memo: e.target.value }));
-  };
+  }, []);
 
-  const handleStatusChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+  const handleStatusChange = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
     setFormData(prev => ({ ...prev, status: e.target.value as InspectionRecord['status'] }));
-  };
+  }, []);
 
-  const handleBasicInfoChange = (field: string, value: string) => {
+  const handleBasicInfoChange = useCallback((field: string, value: string) => {
     setFormData(prev => ({ ...prev, [field]: value }));
-  };
+  }, []);
 
-  const handleInspectorChange = (index: number, value: string) => {
+  const handleInspectorChange = useCallback((index: number, value: string) => {
     setFormData(prev => ({
       ...prev,
       inspectors: prev.inspectors ? prev.inspectors.map((insp, i) => i === index ? value : insp) : [value]
     }));
-  };
+  }, []);
 
-  const addInspector = () => {
+  const addInspector = useCallback(() => {
     setFormData(prev => ({
       ...prev,
       inspectors: [...(prev.inspectors || []), '']
     }));
-  };
+  }, []);
 
-  const removeInspector = (index: number) => {
+  const removeInspector = useCallback((index: number) => {
     setFormData(prev => ({
       ...prev,
       inspectors: prev.inspectors?.filter((_, i) => i !== index) || []
     }));
-  };
+  }, []);
 
-  const handleBreakerChange = (index: number, field: keyof BreakerInfo, value: string | number) => {
+  const handleBreakerChange = useCallback((index: number, field: keyof BreakerInfo, value: string | number) => {
     setFormData(prev => ({
       ...prev,
       breakers: prev.breakers?.map((breaker, i) => 
         i === index ? { ...breaker, [field]: value } : breaker
       ) || []
     }));
-  };
+  }, []);
 
-  const addBreaker = () => {
+  const addBreaker = useCallback(() => {
     const newBreaker: BreakerInfo = {
-      breakerNo: '',
+      breakerNo: '0', // 기본값 0
       category: '1차',
       breakerCapacity: 0,
       loadName: '',
-      type: '',
+      type: '1P', // 기본값 1P
       kind: 'MCCB',
       currentL1: 0,
       currentL2: 0,
@@ -387,20 +392,20 @@ const InspectionDetail: React.FC<InspectionDetailProps> = ({ record, onSave, onC
       ...prev,
       breakers: [...(prev.breakers || []), newBreaker]
     }));
-  };
+  }, []);
 
-  const removeBreaker = (index: number) => {
+  const removeBreaker = useCallback((index: number) => {
     setFormData(prev => ({
       ...prev,
       breakers: prev.breakers?.filter((_, i) => i !== index) || []
     }));
-  };
+  }, []);
 
-  const handleGroundingChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+  const handleGroundingChange = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
     setFormData(prev => ({ ...prev, grounding: e.target.value as '양호' | '불량' | '미점검' }));
-  };
+  }, []);
 
-  const handleThermalImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleThermalImageUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
       const reader = new FileReader();
@@ -421,9 +426,9 @@ const InspectionDetail: React.FC<InspectionDetailProps> = ({ record, onSave, onC
       };
       reader.readAsDataURL(file);
     }
-  };
+  }, []);
 
-  const handleThermalImageDataChange = (field: keyof ThermalImageData, value: string | number) => {
+  const handleThermalImageDataChange = useCallback((field: keyof ThermalImageData, value: string | number) => {
     setFormData(prev => ({
       ...prev,
       thermalImage: {
@@ -431,9 +436,9 @@ const InspectionDetail: React.FC<InspectionDetailProps> = ({ record, onSave, onC
         [field]: value
       } as ThermalImageData
     }));
-  };
+  }, []);
 
-  const handleLoadSummaryChange = (field: keyof LoadSummary, value: number) => {
+  const handleLoadSummaryChange = useCallback((field: keyof LoadSummary, value: number) => {
     setFormData(prev => ({
       ...prev,
       loadSummary: {
@@ -441,9 +446,9 @@ const InspectionDetail: React.FC<InspectionDetailProps> = ({ record, onSave, onC
         [field]: value
       } as LoadSummary
     }));
-  };
+  }, []);
 
-  const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handlePhotoUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
       const reader = new FileReader();
@@ -453,9 +458,9 @@ const InspectionDetail: React.FC<InspectionDetailProps> = ({ record, onSave, onC
       };
       reader.readAsDataURL(file);
     }
-  };
+  }, []);
 
-  const handleAnalyzePhoto = async () => {
+  const handleAnalyzePhoto = useCallback(async () => {
     if (!formData.photoUrl) return;
     setIsAnalyzing(true);
     setAiMessage(null);
@@ -486,15 +491,17 @@ const InspectionDetail: React.FC<InspectionDetailProps> = ({ record, onSave, onC
     } finally {
       setIsAnalyzing(false);
     }
-  };
+  }, [formData.photoUrl, formData.loads]);
 
-  const getStatusColor = (status: string) => {
+  const getStatusColor = useCallback((status: string) => {
     switch (status) {
       case 'Complete': return 'text-emerald-600 bg-emerald-50 border-emerald-200';
       case 'In Progress': return 'text-blue-600 bg-blue-50 border-blue-200';
       default: return 'text-slate-600 bg-slate-50 border-slate-200';
     }
-  };
+  }, []);
+
+  const statusColorClass = useMemo(() => getStatusColor(formData.status), [formData.status, getStatusColor]);
 
   return (
     <div className="bg-white h-full flex flex-col shadow-xl border-l border-slate-200 overflow-hidden">
@@ -507,7 +514,7 @@ const InspectionDetail: React.FC<InspectionDetailProps> = ({ record, onSave, onC
           </h2>
           <p className="text-sm text-slate-500 mt-1">가설 전기 점검</p>
         </div>
-        <div className={`px-3 py-1 rounded-full text-sm font-medium border ${getStatusColor(formData.status)}`}>
+        <div className={`px-3 py-1 rounded-full text-sm font-medium border ${statusColorClass}`}>
           {formData.status}
         </div>
       </div>
@@ -617,7 +624,7 @@ const InspectionDetail: React.FC<InspectionDetailProps> = ({ record, onSave, onC
                 value={formData.lastInspectionDate} 
                 onChange={(e) => handleBasicInfoChange('lastInspectionDate', e.target.value)}
                 className="w-full rounded-lg border-slate-300 border px-3 py-2 text-slate-700 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
-                placeholder="예: 2024-05-20, 09-30-45"
+                placeholder="예: 2024-05-20 09:30:45"
               />
             </div>
           </div>
@@ -677,14 +684,17 @@ const InspectionDetail: React.FC<InspectionDetailProps> = ({ record, onSave, onC
                         )}
                       </button>
                     </div>
-                    <input 
-                      type="text" 
-                      value={breaker.breakerNo} 
+                    <select 
+                      value={breaker.breakerNo || '0'} 
                       onChange={(e) => handleBreakerChange(index, 'breakerNo', e.target.value)}
                       className={`w-full rounded border px-2 py-1.5 text-sm text-slate-700 focus:ring-1 focus:ring-blue-500 outline-none ${
                         isListening && activeVoiceField === `breaker-${index}-breakerNo` ? 'border-red-300 bg-red-50' : 'border-slate-300'
                       }`}
-                    />
+                    >
+                      {Array.from({ length: 11 }, (_, i) => (
+                        <option key={i} value={i.toString()}>{i}</option>
+                      ))}
+                    </select>
                   </div>
                   <div>
                     <div className="flex items-center justify-between mb-1">
@@ -817,14 +827,18 @@ const InspectionDetail: React.FC<InspectionDetailProps> = ({ record, onSave, onC
                         )}
                       </button>
                     </div>
-                    <input 
-                      type="text" 
-                      value={breaker.type} 
+                    <select 
+                      value={breaker.type || '1P'} 
                       onChange={(e) => handleBreakerChange(index, 'type', e.target.value)}
                       className={`w-full rounded border px-2 py-1.5 text-sm text-slate-700 focus:ring-1 focus:ring-blue-500 outline-none ${
                         isListening && activeVoiceField === `breaker-${index}-type` ? 'border-red-300 bg-red-50' : 'border-slate-300'
                       }`}
-                    />
+                    >
+                      <option value="1P">1P</option>
+                      <option value="2P">2P</option>
+                      <option value="3P">3P</option>
+                      <option value="4P">4P</option>
+                    </select>
                   </div>
                   <div>
                     <div className="flex items-center justify-between mb-1">
