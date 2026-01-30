@@ -15,6 +15,7 @@ interface DashboardProps {
   selectedInspectionId?: string | null;
   onSelectionChange?: (id: string | null) => void;
   onReportGenerated?: (report: ReportHistory) => void;
+  onReportsUpdate?: (reports: ReportHistory[]) => void;
   qrCodes?: QRCodeData[];
   reports?: ReportHistory[];
 }
@@ -26,6 +27,7 @@ const Dashboard: React.FC<DashboardProps> = ({
   selectedInspectionId,
   onSelectionChange,
   onReportGenerated,
+  onReportsUpdate,
   qrCodes = [],
   reports = []
 }) => {
@@ -319,6 +321,111 @@ const Dashboard: React.FC<DashboardProps> = ({
 
         onUpdateInspections(updatedInspections);
         
+        // 5. Reports 시트 읽기 (있는 경우)
+        const reportsSheetName = workbook.SheetNames.find(name => 
+          name.toLowerCase().includes('reports') || name.toLowerCase().includes('보고서')
+        );
+        
+        if (reportsSheetName && onReportsUpdate) {
+          try {
+            const reportsSheet = workbook.Sheets[reportsSheetName];
+            const reportsData = XLSX.utils.sheet_to_json(reportsSheet, { header: 1 }) as any[][];
+            
+            if (reportsData.length > 1) {
+              const reportsHeaders = reportsData[0] as string[];
+              
+              // 헤더 인덱스 찾기
+              const findReportsHeaderIndex = (patterns: string[]): number => {
+                for (const pattern of patterns) {
+                  const index = reportsHeaders.findIndex(h => {
+                    const header = String(h || '').toLowerCase();
+                    return patterns.some(p => header.includes(p.toLowerCase()));
+                  });
+                  if (index >= 0) return index;
+                }
+                return -1;
+              };
+              
+              const reportIdIndex = findReportsHeaderIndex(['report id', '보고서 id', 'reportid']);
+              const generatedAtIndex = findReportsHeaderIndex(['보고서 생성일', 'generated at', '생성일', 'generated']);
+              const panelNoIndex = findReportsHeaderIndex(['pnl no', 'pnl no.', 'id', 'board id']);
+              const statusIndex = findReportsHeaderIndex(['status', '상태', '검사 현황']);
+              
+              const importedReports: ReportHistory[] = [];
+              
+              for (let i = 1; i < reportsData.length; i++) {
+                const row = reportsData[i];
+                if (!row || !row[panelNoIndex]) continue;
+                
+                try {
+                  const panelNo = String(row[panelNoIndex] || '').trim();
+                  const reportId = reportIdIndex >= 0 ? String(row[reportIdIndex] || '').trim() : '';
+                  const generatedAtStr = generatedAtIndex >= 0 
+                    ? String(row[generatedAtIndex] || '').trim() 
+                    : '';
+                  
+                  if (panelNo && reportId) {
+                    // 날짜 파싱 시도
+                    let generatedAt: string;
+                    if (generatedAtStr) {
+                      try {
+                        const date = new Date(generatedAtStr);
+                        generatedAt = isNaN(date.getTime()) ? new Date().toISOString() : date.toISOString();
+                      } catch {
+                        generatedAt = new Date().toISOString();
+                      }
+                    } else {
+                      generatedAt = new Date().toISOString();
+                    }
+                    
+                    // 상태 파싱
+                    const statusStr = statusIndex >= 0 ? String(row[statusIndex] || '').trim() : 'Complete';
+                    const validStatus = ['Complete', 'In Progress', 'Pending'].includes(statusStr)
+                      ? statusStr as 'Complete' | 'In Progress' | 'Pending'
+                      : 'Complete';
+                    
+                    // 해당 inspection 찾기
+                    const matchingInspection = updatedInspections.find(ins => ins.panelNo === panelNo);
+                    
+                    importedReports.push({
+                      id: `report-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+                      reportId,
+                      boardId: panelNo,
+                      generatedAt,
+                      status: matchingInspection?.status || validStatus,
+                      htmlContent: '' // Reports 시트에는 HTML 내용이 없으므로 빈 문자열
+                    });
+                  }
+                } catch (error) {
+                  console.error(`Reports 행 ${i + 1} 처리 오류:`, error);
+                }
+              }
+              
+              if (importedReports.length > 0) {
+                // 기존 reports와 병합 (같은 reportId는 업데이트)
+                const existingReports = reports || [];
+                const reportMap = new Map<string, ReportHistory>();
+                
+                // 기존 reports를 맵에 추가
+                existingReports.forEach(report => {
+                  reportMap.set(report.reportId, report);
+                });
+                
+                // 새로운 reports로 업데이트 (같은 reportId가 있으면 덮어쓰기)
+                importedReports.forEach(report => {
+                  reportMap.set(report.reportId, report);
+                });
+                
+                const mergedReports = Array.from(reportMap.values());
+                onReportsUpdate(mergedReports);
+              }
+            }
+          } catch (error) {
+            console.error('Reports 시트 읽기 오류:', error);
+            // Reports 시트 읽기 실패는 경고만 하고 계속 진행
+          }
+        }
+        
         // 결과 메시지
         let message = `${importedRecords.length}개의 분전함 데이터를 가져왔습니다.`;
         if (errorRows.length > 0) {
@@ -393,79 +500,33 @@ const Dashboard: React.FC<DashboardProps> = ({
         ${selectedId ? 'hidden lg:flex' : 'flex'} 
         lg:col-span-4 flex-col gap-6 h-full
       `}>
-        {/* Action Buttons */}
-        <div className="flex gap-2">
+        {/* Action Buttons - 엑셀 버튼은 App.tsx header로 이동됨 */}
+        {/* 엑셀 입력 버튼 (App.tsx에서 트리거 가능하도록 data 속성 추가) */}
+        {isElectron ? (
           <button
-            onClick={async () => {
-              if (isExporting) return; // 중복 클릭 방지
-              
-              setIsExporting(true);
-              try {
-                // 현재 선택된 inspection의 최신 formData가 있으면 반영
-                let inspectionsToExport = [...inspections];
-                if (selectedId && currentFormData && currentFormData.panelNo === selectedId) {
-                  // 현재 편집 중인 formData로 업데이트
-                  inspectionsToExport = inspectionsToExport.map(inspection =>
-                    inspection.panelNo === selectedId ? currentFormData : inspection
-                  );
-                }
-
-                // 엑셀 내보내기 실행
-                await exportToExcel(inspectionsToExport, qrCodes, reports);
-                
-                // 로컬 사진은 유지됨 (내보내기 후에도 최신 사진 유지)
-                
-                alert(`엑셀 내보내기가 완료되었습니다.\n${inspectionsToExport.length}개의 분전반 데이터가 내보내졌습니다.`);
-              } catch (error) {
-                console.error('엑셀 내보내기 오류:', error);
-                alert('엑셀 내보내기 중 오류가 발생했습니다.\n오류: ' + (error instanceof Error ? error.message : String(error)));
-              } finally {
-                setIsExporting(false);
-              }
-            }}
-            disabled={isExporting}
-            className={`flex-1 flex items-center justify-center gap-2 ${
-              isExporting 
-                ? 'bg-emerald-400 cursor-not-allowed' 
-                : 'bg-emerald-600 hover:bg-emerald-700'
-            } text-white px-4 py-2 rounded-lg font-medium transition-colors shadow-sm`}
+            data-excel-import-button
+            onClick={handleElectronFileImport}
+            disabled={isImporting}
+            className="hidden"
           >
-            {isExporting ? (
-              <>
-                <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                <span>내보내는 중...</span>
-              </>
-            ) : (
-              <>
-                <FileSpreadsheet size={18} />
-                <span>엑셀 내보내기</span>
-              </>
-            )}
+            엑셀 입력
           </button>
-          {isElectron ? (
-            <button
-              onClick={handleElectronFileImport}
+        ) : (
+          <label 
+            data-excel-import-button
+            className="hidden"
+          >
+            엑셀 입력
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".xlsx,.xls"
+              onChange={handleExcelImport}
+              className="hidden"
               disabled={isImporting}
-              className="flex-1 flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <FileUp size={18} />
-              {isImporting ? '로딩 중...' : '엑셀 입력'}
-            </button>
-          ) : (
-            <label className="flex-1 flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors shadow-sm cursor-pointer">
-              <FileUp size={18} />
-              {isImporting ? '로딩 중...' : '엑셀 입력'}
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".xlsx,.xls"
-                onChange={handleExcelImport}
-                className="hidden"
-                disabled={isImporting}
-              />
-            </label>
-          )}
-        </div>
+            />
+          </label>
+        )}
 
         {/* Stats Card */}
         <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200">

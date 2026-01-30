@@ -8,8 +8,10 @@ import ReportsList from './components/ReportsList';
 import QRGenerator from './components/QRGenerator';
 import QRScanner from './components/QRScanner';
 import ErrorBoundary from './components/ErrorBoundary';
-import { LayoutDashboard, ScanLine, Bell, Menu, ShieldCheck, ClipboardList, BarChart3, QrCode, X } from 'lucide-react';
+import { LayoutDashboard, ScanLine, Bell, Menu, ShieldCheck, ClipboardList, BarChart3, QrCode, X, FileSpreadsheet, FileUp } from 'lucide-react';
 import { initIndexedDB, getAllInspectionsWithPhotos, saveInspection, savePhoto, dataURLToBlob } from './services/indexedDBService';
+import { exportToExcel } from './services/excelService';
+import * as XLSX from 'xlsx';
 
 /** PNL NO. 형식: 층 1=F1, 2=F2, 3=F3, 4=F4, 5=F5, 6=F6, 7=B1, 8=B2 / TR 1=A, 2=B, 3=C, 4=D. 80% F1 또는 B1, 20% 그 외 층 */
 const MOCK_DATA: InspectionRecord[] = [
@@ -125,6 +127,9 @@ const App: React.FC = () => {
   const mainScrollRef = useRef<HTMLElement>(null);
   const [showNotifications, setShowNotifications] = useState(false);
   const [reports, setReports] = useState<ReportHistory[]>([]);
+  const [isExporting, setIsExporting] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // IndexedDB 초기화 및 데이터 로드
   useEffect(() => {
@@ -384,6 +389,112 @@ const App: React.FC = () => {
             <h2 className="text-lg font-semibold text-slate-800">Distribution Board Manager</h2>
           </div>
           <div className="flex items-center gap-4">
+            {/* 엑셀 내보내기 버튼 */}
+            <button
+              onClick={async () => {
+                if (isExporting) return;
+                setIsExporting(true);
+                try {
+                  await exportToExcel(inspections, qrCodes, reports);
+                  alert(`엑셀 내보내기가 완료되었습니다.\n${inspections.length}개의 분전반 데이터가 내보내졌습니다.`);
+                } catch (error) {
+                  console.error('엑셀 내보내기 오류:', error);
+                  alert('엑셀 내보내기 중 오류가 발생했습니다.\n오류: ' + (error instanceof Error ? error.message : String(error)));
+                } finally {
+                  setIsExporting(false);
+                }
+              }}
+              disabled={isExporting}
+              className={`hidden md:flex items-center gap-2 ${
+                isExporting 
+                  ? 'bg-emerald-400 cursor-not-allowed' 
+                  : 'bg-emerald-600 hover:bg-emerald-700'
+              } text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm`}
+            >
+              {isExporting ? (
+                <>
+                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                  <span>내보내는 중...</span>
+                </>
+              ) : (
+                <>
+                  <FileSpreadsheet size={18} />
+                  <span>엑셀 내보내기</span>
+                </>
+              )}
+            </button>
+            
+            {/* 엑셀 입력 버튼 */}
+            <label className="hidden md:flex bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium items-center gap-2 transition-colors shadow-sm cursor-pointer">
+              <FileUp size={18} />
+              {isImporting ? '로딩 중...' : '엑셀 입력'}
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".xlsx,.xls"
+                onChange={async (e) => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+                  
+                  setIsImporting(true);
+                  
+                  try {
+                    const reader = new FileReader();
+                    reader.onload = async (event) => {
+                      try {
+                        const data = event.target?.result as ArrayBuffer;
+                        if (!data) {
+                          alert('파일을 읽을 수 없습니다.');
+                          setIsImporting(false);
+                          return;
+                        }
+                        
+                        // Dashboard 페이지로 이동
+                        setCurrentPage('dashboard');
+                        
+                        // Dashboard의 파일 입력을 트리거
+                        setTimeout(() => {
+                          const dashboardExcelInput = document.querySelector('[data-excel-import-button] input[type="file"]') as HTMLInputElement;
+                          if (dashboardExcelInput) {
+                            // 파일을 Dashboard의 input에 설정
+                            const dataTransfer = new DataTransfer();
+                            dataTransfer.items.add(new File([data], file.name));
+                            dashboardExcelInput.files = dataTransfer.files;
+                            dashboardExcelInput.dispatchEvent(new Event('change', { bubbles: true }));
+                          }
+                        }, 300);
+                      } catch (error) {
+                        console.error('엑셀 파일 읽기 오류:', error);
+                        alert('엑셀 파일을 읽는 중 오류가 발생했습니다.');
+                      } finally {
+                        setIsImporting(false);
+                        if (fileInputRef.current) {
+                          fileInputRef.current.value = '';
+                        }
+                      }
+                    };
+                    reader.onerror = () => {
+                      alert('파일 읽기 중 오류가 발생했습니다.');
+                      setIsImporting(false);
+                      if (fileInputRef.current) {
+                        fileInputRef.current.value = '';
+                      }
+                    };
+                    reader.readAsArrayBuffer(file);
+                  } catch (error) {
+                    console.error('엑셀 파일 처리 오류:', error);
+                    alert('엑셀 파일 처리 중 오류가 발생했습니다.');
+                    setIsImporting(false);
+                    if (fileInputRef.current) {
+                      fileInputRef.current.value = '';
+                    }
+                  }
+                }}
+                className="hidden"
+                disabled={isImporting}
+              />
+            </label>
+            
              <button 
               onClick={handleScanButtonClick}
               className="hidden md:flex bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium items-center gap-2 transition-colors shadow-sm"
@@ -508,6 +619,7 @@ const App: React.FC = () => {
                     selectedInspectionId={selectedInspectionId}
                     onSelectionChange={setSelectedInspectionId}
                     onReportGenerated={(report) => setReports(prev => [report, ...prev])}
+                    onReportsUpdate={(reports) => setReports(reports)}
                     qrCodes={qrCodes}
                     reports={reports}
                   />
