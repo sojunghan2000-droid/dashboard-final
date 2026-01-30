@@ -42,7 +42,7 @@ export interface LoadSummary {
 }
 
 export interface InspectionRecord {
-  id: string;
+  panelNo: string; // PNL NO. (유일 식별자)
   status: 'Complete' | 'In Progress' | 'Pending';
   lastInspectionDate: string;
   loads: Loads;
@@ -54,7 +54,6 @@ export interface InspectionRecord {
   };
   // 사진의 엑셀 보고서 구조 반영
   inspectors?: string[]; // 점검자 (예: ["이재두 프로", "김윤수 프로", "이승환 프로"])
-  panelNo?: string; // PNL NO.
   projectName?: string; // PJT명
   contractor?: string; // 시공사
   managementNumber?: string; // 관리번호 (판넬명)

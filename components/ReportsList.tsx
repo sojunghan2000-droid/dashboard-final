@@ -1,36 +1,17 @@
-import React, { useState, useEffect } from 'react';
-import { ReportHistory } from '../types';
-import { getSavedReports, viewReport, deleteReport, exportReportToExcel } from '../services/reportService';
-import { FileText, Eye, Trash2, Calendar, CheckCircle2, Clock, AlertCircle, Search, Download } from 'lucide-react';
+import React, { useState } from 'react';
+import { ReportHistory, InspectionRecord } from '../types';
+import { viewReport, exportReportToExcel } from '../services/reportService';
+import { FileText, Trash2, Calendar, CheckCircle2, Clock, AlertCircle, Search, Download } from 'lucide-react';
 
-const ReportsList: React.FC = () => {
-  const [reports, setReports] = useState<ReportHistory[]>([]);
+interface ReportsListProps {
+  reports: ReportHistory[];
+  onDeleteReport: (id: string) => void;
+  inspections: InspectionRecord[];
+}
+
+const ReportsList: React.FC<ReportsListProps> = ({ reports, onDeleteReport, inspections }) => {
   const [selectedReport, setSelectedReport] = useState<ReportHistory | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
-
-  useEffect(() => {
-    loadReports();
-    
-    // localStorage 변경 감지 및 주기적 업데이트
-    const handleStorageChange = () => {
-      loadReports();
-    };
-    
-    window.addEventListener('storage', handleStorageChange);
-    
-    // 주기적으로 확인 (같은 탭에서의 변경 감지)
-    const interval = setInterval(loadReports, 1000);
-    
-    return () => {
-      window.removeEventListener('storage', handleStorageChange);
-      clearInterval(interval);
-    };
-  }, []);
-
-  const loadReports = () => {
-    const savedReports = getSavedReports();
-    setReports(savedReports);
-  };
 
   const handleViewReport = (report: ReportHistory) => {
     viewReport(report);
@@ -38,14 +19,13 @@ const ReportsList: React.FC = () => {
 
   const handleExportExcel = (report: ReportHistory, e: React.MouseEvent) => {
     e.stopPropagation();
-    exportReportToExcel(report);
+    exportReportToExcel(report, inspections);
   };
 
   const handleDeleteReport = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     if (window.confirm('이 보고서를 삭제하시겠습니까?')) {
-      deleteReport(id);
-      loadReports();
+      onDeleteReport(id);
       if (selectedReport?.id === id) {
         setSelectedReport(null);
       }
@@ -103,7 +83,7 @@ const ReportsList: React.FC = () => {
           <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400" size={18} />
           <input
             type="text"
-            placeholder="Search by Board ID or Report ID..."
+            placeholder="Search by PNL NO. or Report ID..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
@@ -143,7 +123,7 @@ const ReportsList: React.FC = () => {
                         {getStatusIcon(report.status)}
                         <span className="font-semibold text-slate-800">{report.reportId}</span>
                       </div>
-                      <p className="text-sm text-slate-600 mb-2">Board ID: {report.boardId}</p>
+                      <p className="text-sm text-slate-600 mb-2">PNL NO.: {report.boardId}</p>
                       <div className="flex items-center gap-2 text-xs text-slate-500">
                         <Calendar size={12} />
                         <span>{formatDate(report.generatedAt)}</span>

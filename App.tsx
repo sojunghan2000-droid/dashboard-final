@@ -1,35 +1,33 @@
 //의미없는 주석
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { InspectionRecord } from './types';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { InspectionRecord, QRCodeData, ReportHistory } from './types';
 import Dashboard from './components/Dashboard';
 import DashboardOverview from './components/DashboardOverview';
 import ReportsList from './components/ReportsList';
 import QRGenerator from './components/QRGenerator';
 import QRScanner from './components/QRScanner';
-import { getSavedReports } from './services/reportService';
+import ErrorBoundary from './components/ErrorBoundary';
 import { LayoutDashboard, ScanLine, Bell, Menu, ShieldCheck, ClipboardList, BarChart3, QrCode, X } from 'lucide-react';
 
+/** PNL NO. 형식: 층 1=F1, 2=F2, 3=F3, 4=F4, 5=F5, 6=F6, 7=B1, 8=B2 / TR 1=A, 2=B, 3=C, 4=D. 80% F1 또는 B1, 20% 그 외 층 */
 const MOCK_DATA: InspectionRecord[] = [
-  { id: 'DB-A-001', status: 'Complete', lastInspectionDate: '2024-05-20 09:30', loads: { welder: true, grinder: false, light: true, pump: false }, photoUrl: 'https://picsum.photos/400/300?random=1', memo: 'All connections secure.', position: { x: 25, y: 30 } },
-  { id: 'DB-A-002', status: 'Complete', lastInspectionDate: '2024-05-20 10:15', loads: { welder: false, grinder: true, light: true, pump: false }, photoUrl: 'https://picsum.photos/400/300?random=2', memo: '', position: { x: 75, y: 25 } },
-  { id: 'DB-A-003', status: 'In Progress', lastInspectionDate: '2024-05-21 08:00', loads: { welder: false, grinder: false, light: true, pump: true }, photoUrl: null, memo: 'Check ground fault interrupter.', position: { x: 50, y: 50 } },
-  { id: 'DB-B-001', status: 'Pending', lastInspectionDate: '-', loads: { welder: false, grinder: false, light: false, pump: false }, photoUrl: null, memo: '', position: { x: 15, y: 70 } },
-  { id: 'DB-B-002', status: 'Pending', lastInspectionDate: '-', loads: { welder: false, grinder: false, light: false, pump: false }, photoUrl: null, memo: '', position: { x: 85, y: 75 } },
-  // 추가 검사 항목들 - 위치 정보 포함
-  { id: 'DB-A-004', status: 'Complete', lastInspectionDate: '2024-05-22 14:20', loads: { welder: true, grinder: true, light: false, pump: false }, photoUrl: null, memo: 'Regular maintenance completed.', position: { x: 30, y: 60 } },
-  { id: 'DB-A-005', status: 'In Progress', lastInspectionDate: '2024-05-23 11:00', loads: { welder: false, grinder: false, light: true, pump: true }, photoUrl: null, memo: 'Inspection in progress.', position: { x: 60, y: 40 } },
-  { id: 'DB-B-003', status: 'Pending', lastInspectionDate: '-', loads: { welder: false, grinder: false, light: false, pump: false }, photoUrl: null, memo: '', position: { x: 40, y: 20 } },
-  { id: 'DB-A-006', status: 'Complete', lastInspectionDate: '2024-05-19 16:45', loads: { welder: true, grinder: false, light: true, pump: true }, photoUrl: null, memo: 'All systems operational.', position: { x: 70, y: 60 } },
-  { id: 'DB-A-007', status: 'In Progress', lastInspectionDate: '2024-05-24 09:15', loads: { welder: false, grinder: true, light: false, pump: false }, photoUrl: null, memo: 'Pending review.', position: { x: 20, y: 45 } },
-  { id: 'DB-A-008', status: 'Pending', lastInspectionDate: '-', loads: { welder: false, grinder: false, light: false, pump: false }, photoUrl: null, memo: '', position: { x: 90, y: 50 } },
-  { id: 'DB-A-009', status: 'Complete', lastInspectionDate: '2024-05-18 13:30', loads: { welder: false, grinder: false, light: true, pump: false }, photoUrl: null, memo: 'Lighting system checked.', position: { x: 35, y: 80 } },
-  { id: 'DB-B-004', status: 'In Progress', lastInspectionDate: '2024-05-25 10:00', loads: { welder: true, grinder: true, light: true, pump: false }, photoUrl: null, memo: 'Multiple loads connected.', position: { x: 65, y: 15 } },
+  { panelNo: '1', status: 'Complete', lastInspectionDate: '2024-05-20 09:30', loads: { welder: true, grinder: false, light: true, pump: false }, photoUrl: 'https://picsum.photos/400/300?random=1', memo: 'All connections secure.', position: { x: 25, y: 30 } },
+  { panelNo: '1-1', status: 'Complete', lastInspectionDate: '2024-05-20 10:15', loads: { welder: false, grinder: true, light: true, pump: false }, photoUrl: 'https://picsum.photos/400/300?random=2', memo: '', position: { x: 75, y: 25 } },
+  { panelNo: '1-2', status: 'In Progress', lastInspectionDate: '2024-05-21 08:00', loads: { welder: false, grinder: false, light: true, pump: true }, photoUrl: null, memo: 'Check ground fault interrupter.', position: { x: 50, y: 50 } },
+  { panelNo: '7', status: 'Pending', lastInspectionDate: '-', loads: { welder: false, grinder: false, light: false, pump: false }, photoUrl: null, memo: '', position: { x: 15, y: 70 } },
+  { panelNo: '7-1', status: 'Pending', lastInspectionDate: '-', loads: { welder: false, grinder: false, light: false, pump: false }, photoUrl: null, memo: '', position: { x: 85, y: 75 } },
+  { panelNo: '1-3', status: 'Complete', lastInspectionDate: '2024-05-22 14:20', loads: { welder: true, grinder: true, light: false, pump: false }, photoUrl: null, memo: 'Regular maintenance completed.', position: { x: 30, y: 60 } },
+  { panelNo: '1-4', status: 'In Progress', lastInspectionDate: '2024-05-23 11:00', loads: { welder: false, grinder: false, light: true, pump: true }, photoUrl: null, memo: 'Inspection in progress.', position: { x: 60, y: 40 } },
+  { panelNo: '3-1', status: 'Pending', lastInspectionDate: '-', loads: { welder: false, grinder: false, light: false, pump: false }, photoUrl: null, memo: '', position: { x: 40, y: 20 } },
+  { panelNo: '7-2', status: 'Complete', lastInspectionDate: '2024-05-19 16:45', loads: { welder: true, grinder: false, light: true, pump: true }, photoUrl: null, memo: 'All systems operational.', position: { x: 70, y: 60 } },
+  { panelNo: '1-5', status: 'In Progress', lastInspectionDate: '2024-05-24 09:15', loads: { welder: false, grinder: true, light: false, pump: false }, photoUrl: null, memo: 'Pending review.', position: { x: 20, y: 45 } },
+  { panelNo: '8-1', status: 'Pending', lastInspectionDate: '-', loads: { welder: false, grinder: false, light: false, pump: false }, photoUrl: null, memo: '', position: { x: 90, y: 50 } },
+  { panelNo: '1-6', status: 'Complete', lastInspectionDate: '2024-05-18 13:30', loads: { welder: false, grinder: false, light: true, pump: false }, photoUrl: null, memo: 'Lighting system checked.', position: { x: 35, y: 80 } },
+  { panelNo: '7-3', status: 'In Progress', lastInspectionDate: '2024-05-25 10:00', loads: { welder: true, grinder: true, light: true, pump: false }, photoUrl: null, memo: 'Multiple loads connected.', position: { x: 65, y: 15 } },
 ];
 
 type Page = 'dashboard' | 'dashboard-overview' | 'reports' | 'qr-generator';
-
-const STORAGE_KEY_INSPECTIONS = 'safetyguard_inspections';
 
 // 유틸리티 함수: 날짜 포맷팅 (YYYY-MM-DD hh:mm:ss)
 const formatDateTime = (date: Date = new Date()): string => {
@@ -68,10 +66,16 @@ const migrateIdFloor = (id: string): string => {
   return id;
 };
 
+// id → panelNo 마이그레이션: 기존 저장 데이터를 새 구조로 변환
+const migrateRecordToPanelNo = (item: any): InspectionRecord => {
+  const panelNo = (item.panelNo ?? item.id ?? '').toString();
+  const { id, ...rest } = item;
+  return { ...rest, panelNo: panelNo || 'UNKNOWN' } as InspectionRecord;
+};
+
 // 층수 마이그레이션 함수: "1st" -> "F1"
 const migrateFloorFormat = (data: any): any => {
   if (typeof data === 'string') {
-    // ID 형식인지 확인 (DB-로 시작)
     if (data.startsWith('DB-')) {
       return migrateIdFloor(data);
     }
@@ -83,10 +87,7 @@ const migrateFloorFormat = (data: any): any => {
   if (data && typeof data === 'object') {
     const migrated: any = {};
     for (const key in data) {
-      if (key === 'id' && typeof data[key] === 'string') {
-        // ID 마이그레이션
-        migrated[key] = migrateIdFloor(data[key]);
-      } else if (key === 'floor' && data[key] === '1st') {
+      if (key === 'floor' && data[key] === '1st') {
         migrated[key] = 'F1';
       } else if (key === 'qrData' && typeof data[key] === 'string') {
         try {
@@ -102,7 +103,6 @@ const migrateFloorFormat = (data: any): any => {
           migrated[key] = data[key];
         }
       } else if (key === 'boardId' && typeof data[key] === 'string') {
-        // Reports의 boardId도 마이그레이션
         migrated[key] = migrateIdFloor(data[key]);
       } else {
         migrated[key] = migrateFloorFormat(data[key]);
@@ -114,90 +114,38 @@ const migrateFloorFormat = (data: any): any => {
 };
 
 const App: React.FC = () => {
-  const [inspections, setInspections] = useState<InspectionRecord[]>(() => {
-    // localStorage에서 불러오기
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY_INSPECTIONS);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        // 층수 마이그레이션: "1st" -> "F1"
-        const migrated = migrateFloorFormat(parsed);
-        
-        // position이 없는 항목들에 기본 위치 정보 추가
-        const result = migrated.map((item: InspectionRecord) => ensurePosition(item));
-        
-        // 마이그레이션된 데이터를 localStorage에 저장
-        try {
-          localStorage.setItem(STORAGE_KEY_INSPECTIONS, JSON.stringify(result));
-        } catch (e) {
-          console.error('Failed to save migrated inspections to localStorage:', e);
-        }
-        
-        return result;
-      }
-    } catch (e) {
-      console.error('Failed to load inspections from localStorage:', e);
-    }
-    
-    // localStorage에 없으면 MOCK_DATA 사용
-    const initialData = MOCK_DATA.map(item => ensurePosition(item));
-    
-    // localStorage에 저장
-    try {
-      localStorage.setItem(STORAGE_KEY_INSPECTIONS, JSON.stringify(initialData));
-    } catch (e) {
-      console.error('Failed to save inspections to localStorage:', e);
-    }
-    
-    return initialData;
-  });
+  // 동적 데이터: localStorage 미사용 (테스트용)
+  const [inspections, setInspections] = useState<InspectionRecord[]>(() =>
+    MOCK_DATA.map(item => ensurePosition(item))
+  );
+  const [qrCodes, setQrCodes] = useState<QRCodeData[]>([]);
   const [currentPage, setCurrentPage] = useState<Page>('dashboard-overview');
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [showScanner, setShowScanner] = useState(false);
   const [selectedInspectionId, setSelectedInspectionId] = useState<string | null>(null);
+  const mainScrollRef = useRef<HTMLElement>(null);
   const [showNotifications, setShowNotifications] = useState(false);
-  const [reports, setReports] = useState<any[]>([]);
-
-  // inspections가 변경될 때마다 localStorage에 저장
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY_INSPECTIONS, JSON.stringify(inspections));
-    } catch (e) {
-      console.error('Failed to save inspections to localStorage:', e);
-    }
-  }, [inspections]);
-
-  // Reports 로드 및 실시간 업데이트 (최적화: throttle 사용)
-  useEffect(() => {
-    let lastLoadTime = 0;
-    const THROTTLE_MS = 500; // 500ms로 throttle
+  const [reports, setReports] = useState<ReportHistory[]>([]);
+  /**
+   * inspections 업데이트 함수: panelNo 기준 중복 제거
+   * PNL NO당 저장 데이터는 항상 1개만 유지 (덮어쓰기 정책)
+   * 같은 panelNo가 여러 개 있으면 마지막 항목만 유지
+   */
+  const updateInspections = useCallback((newInspections: InspectionRecord[]) => {
+    // panelNo 기준으로 중복 제거: 같은 panelNo가 여러 개 있으면 마지막 항목만 유지
+    const seen = new Set<string>();
+    const uniqueInspections: InspectionRecord[] = [];
     
-    const loadReports = () => {
-      const now = Date.now();
-      if (now - lastLoadTime < THROTTLE_MS) {
-        return;
+    // 역순으로 순회하여 마지막 항목만 유지
+    for (let i = newInspections.length - 1; i >= 0; i--) {
+      const inspection = newInspections[i];
+      if (!seen.has(inspection.panelNo)) {
+        seen.add(inspection.panelNo);
+        uniqueInspections.unshift(inspection);
       }
-      lastLoadTime = now;
-      const savedReports = getSavedReports();
-      setReports(savedReports);
-    };
+    }
     
-    loadReports();
-    
-    // localStorage 변경 감지
-    const handleStorageChange = () => {
-      loadReports();
-    };
-    
-    window.addEventListener('storage', handleStorageChange);
-    
-    // throttle된 주기적 확인 (같은 탭에서의 변경 감지)
-    const interval = setInterval(loadReports, 1000);
-    
-    return () => {
-      window.removeEventListener('storage', handleStorageChange);
-      clearInterval(interval);
-    };
+    setInspections(uniqueInspections);
   }, []);
 
   // 알림 드롭다운 외부 클릭 시 닫기
@@ -232,65 +180,51 @@ const App: React.FC = () => {
       // 스캔 시간 생성 (YYYY-MM-DD hh:mm:ss 형식)
       const scanTime = formatDateTime();
 
-      // QR 코드에서 ID 찾기
-      const qrId = data.id || (data.raw && data.raw.includes('DB-') ? data.raw.split('DB-')[1]?.split('-')[0] : null) || data.raw || 'UNKNOWN';
-      
-      // 저장된 QRCodeData에서 추가 정보 찾기
-      const STORAGE_KEY_QR = 'safetyguard_qrcodes';
-      const savedQRCodes: any[] = JSON.parse(localStorage.getItem(STORAGE_KEY_QR) || '[]');
-      const matchedQR = savedQRCodes.find((qr: any) => {
+      // QR 코드에서 PNL NO. 찾기 (id 또는 panelNo)
+      const qrPanelNo = data.panelNo || data.pnlNo || data.id || (data.raw && data.raw.includes('DB-') ? data.raw : null) || data.raw || 'UNKNOWN';
+
+      const matchedQR = qrCodes.find((qr: any) => {
         try {
           const qrDataObj = JSON.parse(qr.qrData || '{}');
-          return qrDataObj.id === qrId || qr.id === qrId;
+          return qrDataObj.id === qrPanelNo || qrDataObj.panelNo === qrPanelNo || qr.id === qrPanelNo;
         } catch {
-          return qr.id === qrId;
+          return qr.id === qrPanelNo;
         }
       });
 
-      // 기존 보드 찾기 (ID 기준)
-      const existingBoard = inspections.find(i => i.id === qrId || i.id.includes(qrId));
+      // 기존 보드 찾기 (panelNo 기준)
+      const existingBoard = inspections.find(i => i.panelNo === qrPanelNo || i.panelNo.includes(qrPanelNo));
 
       if (existingBoard) {
-        // 기존 보드 업데이트 - QR 정보 반영
         const updatedBoard: InspectionRecord = {
           ...existingBoard,
-          lastInspectionDate: scanTime, // QR 스캔 시간으로 자동 업데이트 (항상 스캔 시간으로 설정)
-          // QR 데이터에서 정보 가져오기 (우선순위: QR 데이터 > 기존 값)
-          panelNo: data.panelNo || data.pnlNo || existingBoard.panelNo || (matchedQR ? `PNL NO. ${qrId}` : undefined),
+          lastInspectionDate: scanTime,
+          panelNo: data.panelNo || data.pnlNo || existingBoard.panelNo || (matchedQR ? `PNL NO. ${qrPanelNo}` : existingBoard.panelNo),
           projectName: data.projectName || data.pjtName || data.pjt || existingBoard.projectName || '',
           contractor: data.contractor || data.시공사 || existingBoard.contractor || '',
-          managementNumber: data.managementNumber || data.관리번호 || data.panelName || existingBoard.managementNumber || qrId,
+          managementNumber: data.managementNumber || data.관리번호 || data.panelName || existingBoard.managementNumber || qrPanelNo,
         };
-        
-        setInspections(prev => prev.map(item => item.id === existingBoard.id ? updatedBoard : item));
+        setInspections(prev => prev.map(item => item.panelNo === existingBoard.panelNo ? updatedBoard : item));
         setCurrentPage('dashboard');
-        setSelectedInspectionId(existingBoard.id);
+        setSelectedInspectionId(existingBoard.panelNo);
         setShowScanner(false);
-        
-        // 점검일이 자동으로 업데이트되었음을 알림
-        setTimeout(() => {
-          // InspectionDetail이 업데이트된 record를 받아서 자동으로 formData가 업데이트됨
-        }, 100);
       } else {
-        // 새 Distribution Board 생성
-        const newId = data.id || `DB-${data.floor || 'F1'}-${data.location || 'LOC'}`;
+        const newPanelNo = data.panelNo || data.pnlNo || data.id || `DB-${data.floor || 'F1'}-${data.location || 'LOC'}`;
         const newItem: InspectionRecord = {
-          id: newId,
+          panelNo: newPanelNo,
           status: 'In Progress',
-          lastInspectionDate: scanTime, // QR 스캔 시간으로 설정
+          lastInspectionDate: scanTime,
           loads: { welder: false, grinder: false, light: false, pump: false },
           photoUrl: null,
           memo: '',
           position: data.position ? (typeof data.position === 'object' ? data.position : { x: parseFloat(data.position) || 50, y: 50 }) : undefined,
-          // QR 정보에서 기본 정보 가져오기
-          panelNo: data.panelNo || data.pnlNo || `PNL NO. ${newId}`,
           projectName: data.projectName || data.pjtName || data.pjt || '',
           contractor: data.contractor || data.시공사 || '',
-          managementNumber: data.managementNumber || data.관리번호 || data.panelName || newId,
+          managementNumber: data.managementNumber || data.관리번호 || data.panelName || newPanelNo,
         };
         setInspections(prev => [newItem, ...prev]);
         setCurrentPage('dashboard');
-        setSelectedInspectionId(newId);
+        setSelectedInspectionId(newPanelNo);
         setShowScanner(false);
       }
     } catch (error) {
@@ -298,16 +232,15 @@ const App: React.FC = () => {
       alert(`QR 코드 스캔 완료!\n데이터: ${qrData}`);
       setShowScanner(false);
     }
-  }, [inspections, setInspections, setCurrentPage, setSelectedInspectionId, setShowScanner]);
+  }, [inspections, qrCodes]);
 
   const handleScanButtonClick = useCallback(() => {
     // QR 스캔 버튼 클릭 순간의 시간 생성
     const scanTime = formatDateTime();
     
-    // 현재 선택된 inspection이 있으면 점검일 업데이트
     if (selectedInspectionId) {
-      setInspections(prev => prev.map(item => 
-        item.id === selectedInspectionId 
+      setInspections(prev => prev.map(item =>
+        item.panelNo === selectedInspectionId
           ? { ...item, lastInspectionDate: scanTime }
           : item
       ));
@@ -328,7 +261,7 @@ const App: React.FC = () => {
           >
             <ShieldCheck size={20} className="text-white" />
           </div>
-          <h1 className="font-bold text-lg tracking-tight whitespace-nowrap">SafetyGuard<span className="text-blue-400">Pro</span></h1>
+          <h1 className="font-bold text-lg tracking-tight whitespace-nowrap">성수동 <span className="text-blue-400">K-PJT</span></h1>
         </div>
         
         <nav className="flex-1 py-6 px-3 space-y-1">
@@ -374,7 +307,7 @@ const App: React.FC = () => {
             }`}
           >
             <QrCode size={20} className={currentPage === 'qr-generator' ? '' : 'opacity-70'}/>
-            QR Generator
+            DB Master
           </div>
         </nav>
 
@@ -452,7 +385,7 @@ const App: React.FC = () => {
                                 {report.reportId}
                               </p>
                               <p className="text-xs text-slate-600 mb-1">
-                                Board ID: {report.boardId}
+                                PNL NO.: {report.boardId}
                               </p>
                               <p className="text-xs text-slate-500">
                                 {new Date(report.generatedAt).toLocaleString('ko-KR', {
@@ -499,32 +432,43 @@ const App: React.FC = () => {
         </header>
 
         {/* Main Content */}
-        <main className="flex-1 overflow-y-auto p-6 relative">
+        <main ref={mainScrollRef} className="flex-1 overflow-y-auto overflow-x-hidden p-6 relative">
           {currentPage === 'dashboard-overview' ? (
             <DashboardOverview 
               inspections={inspections} 
-              onUpdateInspections={setInspections}
+              onUpdateInspections={updateInspections}
               selectedInspectionId={selectedInspectionId}
               onSelectionChange={setSelectedInspectionId}
             />
           ) : currentPage === 'dashboard' ? (
-            <Dashboard 
-              inspections={inspections}
-              onUpdateInspections={setInspections}
-              onScan={() => setShowScanner(true)}
-              selectedInspectionId={selectedInspectionId}
-              onSelectionChange={setSelectedInspectionId}
-            />
+            <ErrorBoundary>
+              <Dashboard 
+                inspections={inspections}
+                onUpdateInspections={updateInspections}
+                onScan={() => setShowScanner(true)}
+                selectedInspectionId={selectedInspectionId}
+                onSelectionChange={setSelectedInspectionId}
+                onReportGenerated={(report) => setReports(prev => [report, ...prev])}
+                qrCodes={qrCodes}
+                reports={reports}
+              />
+            </ErrorBoundary>
           ) : currentPage === 'reports' ? (
-            <ReportsList />
+            <ReportsList 
+              reports={reports}
+              onDeleteReport={(id) => setReports(prev => prev.filter(r => r.id !== id))}
+              inspections={inspections}
+            />
           ) : (
             <QRGenerator 
               inspections={inspections}
+              qrCodes={qrCodes}
+              onQrCodesChange={setQrCodes}
               onSelectInspection={(inspectionId) => {
                 setSelectedInspectionId(inspectionId);
-                setCurrentPage('dashboard-overview');
               }}
               onUpdateInspections={setInspections}
+              mainScrollRef={mainScrollRef}
             />
           )}
         </main>

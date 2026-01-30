@@ -6,11 +6,24 @@ import { analyzeInspectionPhoto } from '../services/geminiService';
 interface InspectionDetailProps {
   record: InspectionRecord;
   onSave: (updatedRecord: InspectionRecord) => void;
+  onGenerateReport?: (record: InspectionRecord) => void;
   onCancel: () => void;
+  onFormDataChange?: (formData: InspectionRecord) => void; // 최신 formData 전달용
 }
 
-const InspectionDetail: React.FC<InspectionDetailProps> = ({ record, onSave, onCancel }) => {
-  const [formData, setFormData] = useState<InspectionRecord>(record);
+const InspectionDetail: React.FC<InspectionDetailProps> = ({ record, onSave, onGenerateReport, onCancel, onFormDataChange }) => {
+  // 기본값으로 안전한 record 생성 (hooks는 항상 호출되어야 함)
+  const safeRecord: InspectionRecord = record || {
+    panelNo: 'UNKNOWN',
+    status: 'Pending',
+    lastInspectionDate: '-',
+    loads: { welder: false, grinder: false, light: false, pump: false },
+    photoUrl: null,
+    memo: '',
+    position: { x: 50, y: 50 }
+  };
+
+  const [formData, setFormData] = useState<InspectionRecord>(safeRecord);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [aiMessage, setAiMessage] = useState<string | null>(null);
   const [isListening, setIsListening] = useState(false);
@@ -22,14 +35,85 @@ const InspectionDetail: React.FC<InspectionDetailProps> = ({ record, onSave, onC
   const lastActivityRef = useRef<number>(0);
   const isListeningRef = useRef<boolean>(false);
   const activeFieldRef = useRef<string | null>(null); // 음성 입력 대상 필드
+  const prevRecordRef = useRef<InspectionRecord>(safeRecord);
+  const isUpdatingFromRecordRef = useRef(false);
+  const onFormDataChangeRef = useRef(onFormDataChange);
 
+  // onFormDataChange ref 업데이트
   useEffect(() => {
-    setFormData({
-      ...record,
-      position: record.position || { x: 50, y: 50 } // 기본 위치 정보 추가
-    });
-    setAiMessage(null);
-  }, [record]);
+    onFormDataChangeRef.current = onFormDataChange;
+  }, [onFormDataChange]);
+
+  // record가 변경될 때 formData 초기화
+  useEffect(() => {
+    try {
+      // record가 없으면 기본값 사용
+      const currentRecord = record || safeRecord;
+      
+      // record가 실제로 변경된 경우에만 업데이트
+      if (prevRecordRef.current.panelNo !== currentRecord.panelNo || 
+          prevRecordRef.current.photoUrl !== currentRecord.photoUrl) {
+        isUpdatingFromRecordRef.current = true;
+        const newFormData = {
+          ...currentRecord,
+          position: currentRecord.position || { x: 50, y: 50 }
+        };
+        setFormData(newFormData);
+        setAiMessage(null);
+        prevRecordRef.current = { ...currentRecord }; // 객체 복사
+        // 다음 렌더링 사이클에서 플래그 리셋
+        setTimeout(() => {
+          isUpdatingFromRecordRef.current = false;
+        }, 0);
+      }
+    } catch (error) {
+      console.error('Error updating formData from record:', error);
+      // 에러 발생 시에도 기본값으로 설정
+      const currentRecord = record || safeRecord;
+      setFormData({
+        ...currentRecord,
+        position: currentRecord.position || { x: 50, y: 50 }
+      });
+    }
+  }, [record, safeRecord]);
+
+  // formData가 사용자에 의해 변경될 때만 부모 컴포넌트에 전달
+  const prevFormDataRef = useRef<InspectionRecord>(formData);
+  const isInitialMountRef = useRef(true);
+  
+  useEffect(() => {
+    try {
+      // 초기 마운트 시에는 전달하지 않음
+      if (isInitialMountRef.current) {
+        isInitialMountRef.current = false;
+        prevFormDataRef.current = { ...formData }; // 객체 복사
+        return;
+      }
+
+      // record 변경으로 인한 업데이트는 제외
+      if (isUpdatingFromRecordRef.current) {
+        prevFormDataRef.current = { ...formData }; // 객체 복사
+        return;
+      }
+
+      // formData가 실제로 변경된 경우에만 전달
+      // JSON 비교로 실제 변경 여부 확인 (성능을 위해 간단한 필드만 비교)
+      const hasChanged = 
+        prevFormDataRef.current.photoUrl !== formData.photoUrl ||
+        prevFormDataRef.current.memo !== formData.memo ||
+        prevFormDataRef.current.status !== formData.status ||
+        JSON.stringify(prevFormDataRef.current.loads) !== JSON.stringify(formData.loads);
+
+      if (hasChanged && onFormDataChangeRef.current) {
+        onFormDataChangeRef.current({ ...formData }); // 객체 복사하여 전달
+      }
+      
+      prevFormDataRef.current = { ...formData }; // 객체 복사
+    } catch (error) {
+      console.error('Error in formData change handler:', error);
+      // 에러 발생 시에도 계속 진행
+    }
+  }, [formData]);
 
   // Initialize Speech Recognition
   useEffect(() => {
@@ -335,7 +419,15 @@ const InspectionDetail: React.FC<InspectionDetailProps> = ({ record, onSave, onC
   }, []);
 
   const handleStatusChange = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
-    setFormData(prev => ({ ...prev, status: e.target.value as InspectionRecord['status'] }));
+    // #region agent log
+    fetch('http://127.0.0.1:7243/ingest/d3499377-2a3e-49de-91f7-b42902b9b2ce',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'InspectionDetail.tsx:337',message:'handleStatusChange called',data:{oldValue:e.target.defaultValue,newValue:e.target.value,selectElement:!!e.target},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+    // #endregion
+    setFormData(prev => {
+      // #region agent log
+      fetch('http://127.0.0.1:7243/ingest/d3499377-2a3e-49de-91f7-b42902b9b2ce',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'InspectionDetail.tsx:339',message:'handleStatusChange updating formData',data:{oldStatus:prev.status,newStatus:e.target.value},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+      // #endregion
+      return { ...prev, status: e.target.value as InspectionRecord['status'] };
+    });
   }, []);
 
   const handleBasicInfoChange = useCallback((field: string, value: string) => {
@@ -448,16 +540,64 @@ const InspectionDetail: React.FC<InspectionDetailProps> = ({ record, onSave, onC
     }));
   }, []);
 
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   const handlePhotoUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
+      // 파일 크기 검증 (10MB 제한)
+      if (file.size > 10 * 1024 * 1024) {
+        alert('파일 크기는 10MB 이하여야 합니다.');
+        if (fileInputRef.current) {
+          fileInputRef.current.value = '';
+        }
+        return;
+      }
+
       const reader = new FileReader();
       reader.onloadend = () => {
         setFormData(prev => ({ ...prev, photoUrl: reader.result as string }));
         setAiMessage(null);
       };
+      reader.onerror = () => {
+        alert('파일 읽기 중 오류가 발생했습니다.');
+        if (fileInputRef.current) {
+          fileInputRef.current.value = '';
+        }
+      };
       reader.readAsDataURL(file);
     }
+    // 파일 입력 리셋 (같은 파일을 다시 선택할 수 있도록)
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  }, []);
+
+  const handlePhotoDrop = useCallback((e: React.DragEvent<HTMLLabelElement>) => {
+    e.preventDefault();
+    const file = e.dataTransfer.files?.[0];
+    if (file && file.type.startsWith('image/')) {
+      // 파일 크기 검증
+      if (file.size > 10 * 1024 * 1024) {
+        alert('파일 크기는 10MB 이하여야 합니다.');
+        return;
+      }
+
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setFormData(prev => ({ ...prev, photoUrl: reader.result as string }));
+        setAiMessage(null);
+      };
+      reader.onerror = () => {
+        alert('파일 읽기 중 오류가 발생했습니다.');
+      };
+      reader.readAsDataURL(file);
+    }
+  }, []);
+
+  const handlePhotoDragOver = useCallback((e: React.DragEvent<HTMLLabelElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
   }, []);
 
   const handleAnalyzePhoto = useCallback(async () => {
@@ -503,14 +643,31 @@ const InspectionDetail: React.FC<InspectionDetailProps> = ({ record, onSave, onC
 
   const statusColorClass = useMemo(() => getStatusColor(formData.status), [formData.status, getStatusColor]);
 
+  // record가 없으면 에러 메시지 표시
+  if (!record) {
+    return (
+      <div className="bg-white h-full flex flex-col shadow-xl border-l border-slate-200 overflow-hidden">
+        <div className="h-full flex flex-col items-center justify-center">
+          <p className="text-slate-500 text-lg">레코드 정보를 불러올 수 없습니다.</p>
+          <button
+            onClick={onCancel}
+            className="mt-4 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+          >
+            돌아가기
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="bg-white h-full flex flex-col shadow-xl border-l border-slate-200 overflow-hidden">
       {/* Header */}
       <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
         <div>
           <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
-            <span className="bg-slate-200 text-slate-600 px-2 py-1 rounded text-sm">ID</span>
-            {formData.id}
+            <span className="bg-slate-200 text-slate-600 px-2 py-1 rounded text-sm">PNL NO.</span>
+            {formData.panelNo}
           </h2>
           <p className="text-sm text-slate-500 mt-1">가설 전기 점검</p>
         </div>
@@ -611,6 +768,7 @@ const InspectionDetail: React.FC<InspectionDetailProps> = ({ record, onSave, onC
                 value={formData.status} 
                 onChange={handleStatusChange}
                 className="w-full rounded-lg border-slate-300 border px-3 py-2 text-slate-700 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all"
+                style={{ pointerEvents: 'auto', zIndex: 9999, position: 'relative' }}
               >
                 <option value="Complete">양호</option>
                 <option value="In Progress">점검 중</option>
@@ -687,9 +845,10 @@ const InspectionDetail: React.FC<InspectionDetailProps> = ({ record, onSave, onC
                     <select 
                       value={breaker.breakerNo || '0'} 
                       onChange={(e) => handleBreakerChange(index, 'breakerNo', e.target.value)}
-                      className={`w-full rounded border px-2 py-1.5 text-sm text-slate-700 focus:ring-1 focus:ring-blue-500 outline-none ${
+                      className={`w-full rounded border px-2 py-1.5 text-sm text-slate-700 focus:ring-1 focus:ring-blue-500 outline-none cursor-pointer bg-white ${
                         isListening && activeVoiceField === `breaker-${index}-breakerNo` ? 'border-red-300 bg-red-50' : 'border-slate-300'
                       }`}
+                      style={{ pointerEvents: 'auto', zIndex: 9999, position: 'relative' }}
                     >
                       {Array.from({ length: 11 }, (_, i) => (
                         <option key={i} value={i.toString()}>{i}</option>
@@ -724,9 +883,10 @@ const InspectionDetail: React.FC<InspectionDetailProps> = ({ record, onSave, onC
                     <select 
                       value={breaker.category} 
                       onChange={(e) => handleBreakerChange(index, 'category', e.target.value as '1차' | '2차')}
-                      className={`w-full rounded border px-2 py-1.5 text-sm text-slate-700 focus:ring-1 focus:ring-blue-500 outline-none ${
+                      className={`w-full rounded border px-2 py-1.5 text-sm text-slate-700 focus:ring-1 focus:ring-blue-500 outline-none cursor-pointer bg-white ${
                         isListening && activeVoiceField === `breaker-${index}-category` ? 'border-red-300 bg-red-50' : 'border-slate-300'
                       }`}
+                      style={{ pointerEvents: 'auto', zIndex: 9999, position: 'relative' }}
                     >
                       <option value="1차">1차</option>
                       <option value="2차">2차</option>
@@ -794,9 +954,10 @@ const InspectionDetail: React.FC<InspectionDetailProps> = ({ record, onSave, onC
                     <select 
                       value={breaker.kind} 
                       onChange={(e) => handleBreakerChange(index, 'kind', e.target.value as 'MCCB' | 'ELB')}
-                      className={`w-full rounded border px-2 py-1.5 text-sm text-slate-700 focus:ring-1 focus:ring-blue-500 outline-none ${
+                      className={`w-full rounded border px-2 py-1.5 text-sm text-slate-700 focus:ring-1 focus:ring-blue-500 outline-none cursor-pointer bg-white ${
                         isListening && activeVoiceField === `breaker-${index}-kind` ? 'border-red-300 bg-red-50' : 'border-slate-300'
                       }`}
+                      style={{ pointerEvents: 'auto', zIndex: 9999, position: 'relative' }}
                     >
                       <option value="MCCB">MCCB</option>
                       <option value="ELB">ELB</option>
@@ -830,9 +991,10 @@ const InspectionDetail: React.FC<InspectionDetailProps> = ({ record, onSave, onC
                     <select 
                       value={breaker.type || '1P'} 
                       onChange={(e) => handleBreakerChange(index, 'type', e.target.value)}
-                      className={`w-full rounded border px-2 py-1.5 text-sm text-slate-700 focus:ring-1 focus:ring-blue-500 outline-none ${
+                      className={`w-full rounded border px-2 py-1.5 text-sm text-slate-700 focus:ring-1 focus:ring-blue-500 outline-none cursor-pointer bg-white ${
                         isListening && activeVoiceField === `breaker-${index}-type` ? 'border-red-300 bg-red-50' : 'border-slate-300'
                       }`}
+                      style={{ pointerEvents: 'auto', zIndex: 9999, position: 'relative' }}
                     >
                       <option value="1P">1P</option>
                       <option value="2P">2P</option>
@@ -968,7 +1130,8 @@ const InspectionDetail: React.FC<InspectionDetailProps> = ({ record, onSave, onC
           <select 
             value={formData.grounding || '미점검'} 
             onChange={handleGroundingChange}
-            className="w-full rounded-lg border-slate-300 border px-3 py-2 text-slate-700 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
+            className="w-full rounded-lg border-slate-300 border px-3 py-2 text-slate-700 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none cursor-pointer bg-white"
+            style={{ pointerEvents: 'auto', zIndex: 9999, position: 'relative' }}
           >
             <option value="양호">양호</option>
             <option value="불량">불량</option>
@@ -1196,12 +1359,23 @@ const InspectionDetail: React.FC<InspectionDetailProps> = ({ record, onSave, onC
                 )}
               </div>
             ) : (
-              <label className="flex flex-col items-center justify-center w-full h-48 border-2 border-dashed border-slate-300 rounded-xl cursor-pointer bg-slate-50 hover:bg-slate-100 transition-colors">
+              <label 
+                className="flex flex-col items-center justify-center w-full h-48 border-2 border-dashed border-slate-300 rounded-xl cursor-pointer bg-slate-50 hover:bg-slate-100 transition-colors"
+                onDrop={handlePhotoDrop}
+                onDragOver={handlePhotoDragOver}
+              >
                 <div className="flex flex-col items-center justify-center pt-5 pb-6">
                   <Camera className="w-8 h-8 text-slate-400 mb-2" />
                   <p className="text-sm text-slate-500">사진을 업로드하거나 드래그하세요</p>
+                  <p className="text-xs text-slate-400 mt-1">(최대 10MB)</p>
                 </div>
-                <input type="file" className="hidden" accept="image/*" onChange={handlePhotoUpload} />
+                <input 
+                  ref={fileInputRef}
+                  type="file" 
+                  className="hidden" 
+                  accept="image/*" 
+                  onChange={handlePhotoUpload} 
+                />
               </label>
             )}
           </div>
@@ -1260,10 +1434,19 @@ const InspectionDetail: React.FC<InspectionDetailProps> = ({ record, onSave, onC
         </button>
         <button
           onClick={() => onSave(formData)}
-          className="flex-[2] py-2.5 px-4 rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700 shadow-md hover:shadow-lg transition-all flex justify-center items-center gap-2"
+          className="flex-1 py-2.5 px-4 rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700 shadow-md hover:shadow-lg transition-all flex justify-center items-center gap-2"
         >
           <Save size={18} />
-          Save & Generate Report
+          Save
+        </button>
+        <button
+          onClick={() => onGenerateReport?.(formData)}
+          disabled={formData.status !== 'Complete'}
+          className="flex-1 py-2.5 px-4 rounded-lg bg-emerald-600 text-white font-medium hover:bg-emerald-700 shadow-md hover:shadow-lg transition-all flex justify-center items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-emerald-600"
+          title={formData.status !== 'Complete' ? '상태가 Complete일 때만 보고서를 생성할 수 있습니다.' : '보고서 생성'}
+        >
+          <FileText size={18} />
+          Report Generate
         </button>
         </div>
 

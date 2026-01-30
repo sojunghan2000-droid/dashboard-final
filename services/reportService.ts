@@ -3,18 +3,20 @@ import * as XLSX from 'xlsx';
 
 const STORAGE_KEY = 'safetyguard_reports';
 
-// Save report to localStorage
-const saveReport = (record: InspectionRecord, htmlContent: string): void => {
+// Create report object (no storage)
+export const createReportFromRecord = (record: InspectionRecord, htmlContent: string): ReportHistory => ({
+  id: `report-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+  reportId: `RPT-${record.panelNo}-${new Date().toISOString().split('T')[0]}`,
+  boardId: record.panelNo,
+  generatedAt: new Date().toISOString(),
+  status: record.status,
+  htmlContent: htmlContent
+});
+
+// Save report to localStorage (legacy; use onReportSaved for in-memory)
+const saveReportToStorage = (report: ReportHistory): void => {
   const reports: ReportHistory[] = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
-  const newReport: ReportHistory = {
-    id: `report-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-    reportId: `RPT-${record.id}-${new Date().toISOString().split('T')[0]}`,
-    boardId: record.id,
-    generatedAt: new Date().toISOString(),
-    status: record.status,
-    htmlContent: htmlContent
-  };
-  reports.unshift(newReport); // Add to beginning
+  reports.unshift(report);
   localStorage.setItem(STORAGE_KEY, JSON.stringify(reports));
 };
 
@@ -74,8 +76,16 @@ export const getReportById = (id: string): ReportHistory | null => {
   return reports.find(r => r.id === id) || null;
 };
 
-// Delete report
-export const deleteReport = (id: string): void => {
+// Delete report (in-memory: pass options; otherwise localStorage)
+export const deleteReport = (
+  id: string,
+  options?: { reports: ReportHistory[]; setReports: (reports: ReportHistory[]) => void }
+): void => {
+  if (options) {
+    const filtered = options.reports.filter(r => r.id !== id);
+    options.setReports(filtered);
+    return;
+  }
   const reports = getSavedReports();
   const filtered = reports.filter(r => r.id !== id);
   localStorage.setItem(STORAGE_KEY, JSON.stringify(filtered));
@@ -89,10 +99,10 @@ export const generateExcelReport = (record: InspectionRecord): void => {
   const basicInfoRows: any[][] = [
     ['공사용 가설 분전반', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '가설 전기 점검'],
     [],
-    ['PNL NO.', record.panelNo || record.id, '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
+    ['PNL NO.', record.panelNo, '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
     ['PJT명', record.projectName || '', '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
     ['시공사', record.contractor || '', '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
-    ['관리번호 (판넬명)', record.managementNumber || record.id, '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
+    ['관리번호 (판넬명)', record.managementNumber || '', '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
     ['점검자', (record.inspectors || []).join(', ') || '', '', '', '', '', '', '', '', '', '', '', '', '', '', ''],
     [],
   ];
@@ -222,11 +232,14 @@ export const generateExcelReport = (record: InspectionRecord): void => {
   XLSX.utils.book_append_sheet(wb, ws, '점검 보고서');
 
   // 파일 다운로드
-  const fileName = `가설전기점검_${record.id}_${new Date().toISOString().split('T')[0]}.xlsx`;
+  const fileName = `가설전기점검_${record.panelNo}_${new Date().toISOString().split('T')[0]}.xlsx`;
   XLSX.writeFile(wb, fileName);
 };
 
-export const generateReport = (record: InspectionRecord): void => {
+export const generateReport = (
+  record: InspectionRecord,
+  onReportSaved?: (report: ReportHistory) => void
+): void => {
   // In Progress 상태는 리포트 생성하지 않음
   if (record.status === 'In Progress') {
     return;
@@ -250,7 +263,7 @@ export const generateReport = (record: InspectionRecord): void => {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>가설 전기 점검 보고서 - ${record.id}</title>
+  <title>가설 전기 점검 보고서 - ${record.panelNo}</title>
   <style>
     * {
       margin: 0;
@@ -388,7 +401,7 @@ export const generateReport = (record: InspectionRecord): void => {
     <div class="basic-info">
       <div class="info-item">
         <div class="info-label">PNL NO.</div>
-        <div class="info-value">${record.panelNo || record.id || ''}</div>
+        <div class="info-value">${record.panelNo || ''}</div>
       </div>
       <div class="info-item">
         <div class="info-label">PJT명</div>
@@ -506,8 +519,12 @@ export const generateReport = (record: InspectionRecord): void => {
 </html>
   `;
 
-  // Save report to localStorage
-  saveReport(record, htmlContent);
+  const newReport = createReportFromRecord(record, htmlContent);
+  if (onReportSaved) {
+    onReportSaved(newReport);
+  } else {
+    saveReportToStorage(newReport);
+  }
 
   // Open report in new window
   const reportWindow = window.open('', '_blank');
@@ -526,12 +543,10 @@ export const viewReport = (report: ReportHistory): void => {
   }
 };
 
-// Export report to Excel
-export const exportReportToExcel = (report: ReportHistory): void => {
-  // report.boardId로 InspectionRecord 찾기
-  const inspections: InspectionRecord[] = JSON.parse(localStorage.getItem('safetyguard_inspections') || '[]');
-  const record = inspections.find(i => i.id === report.boardId);
-  
+// Export report to Excel (inspections: in-memory list; omit to fallback to localStorage)
+export const exportReportToExcel = (report: ReportHistory, inspections?: InspectionRecord[]): void => {
+  const list = inspections ?? JSON.parse(localStorage.getItem('safetyguard_inspections') || '[]');
+  const record = list.find((i: InspectionRecord) => i.panelNo === report.boardId);
   if (record) {
     generateExcelReport(record);
   } else {

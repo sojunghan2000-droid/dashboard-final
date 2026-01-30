@@ -1,5 +1,5 @@
 {
-  "name": "SafetyGuard DB Manager",
+  "name": "성수동 K-PJT",
   "description": "Integrated management system for temporary distribution boards with AI-powered inspection.",
   "requestFramePermissions": [
     "camera"

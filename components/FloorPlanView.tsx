@@ -4,13 +4,37 @@ import { CheckCircle2, Clock, AlertCircle, X, QrCode, Edit2, Save, MapPin } from
 
 interface FloorPlanViewProps {
   inspections: InspectionRecord[];
+  /** QR 코드 목록 (동적 데이터) */
+  qrCodes?: QRCodeData[];
   onSelectInspection?: (inspection: InspectionRecord) => void;
   onUpdateInspections?: (inspections: InspectionRecord[]) => void;
   selectedInspectionId?: string | null;
   onSelectionChange?: (id: string | null) => void;
   selectedFloor?: 'F1' | 'B1';
   onFloorChange?: (floor: 'F1' | 'B1') => void;
+  /** false면 마커 클릭/선택 시 상세 패널(모달)을 띄우지 않음 */
+  showDetailPanel?: boolean;
+  /** true면 상세 패널이 열릴 때 위치 수정 모드로 열림 */
+  startInEditMode?: boolean;
 }
+
+/** MOCK_DATA와 동일: 1=F1, 2=F2, …, 6=F6, 7=B1, 8=B2. F1 탭에 1~6층, B1 탭에 7~8층 표시 */
+const UPPER_FLOORS = ['F1', 'F2', 'F3', 'F4', 'F5', 'F6'];
+const BASEMENT_FLOORS = ['B1', 'B2'];
+const FLOOR_LABEL_MAP: Record<string, string> = {
+  '1': 'F1', '2': 'F2', '3': 'F3', '4': 'F4', '5': 'F5', '6': 'F6',
+  '7': 'B1', '8': 'B2',
+  'F1': 'F1', 'F2': 'F2', 'F3': 'F3', 'F4': 'F4', 'F5': 'F5', 'F6': 'F6',
+  'B1': 'B1', 'B2': 'B2',
+};
+/** QR/검사 데이터의 층 값(숫자 '1','7' 또는 레이블 'F1','B1')을 표준 레이블로 통일 */
+const toFloorLabel = (floor: string | null): string | null => {
+  if (!floor) return null;
+  const key = String(floor).trim().toUpperCase();
+  return FLOOR_LABEL_MAP[key] ?? floor;
+};
+const floorToTab = (floor: string): 'F1' | 'B1' =>
+  BASEMENT_FLOORS.includes(toFloorLabel(floor) ?? '') ? 'B1' : 'F1';
 
 interface QRLocation {
   id: string;
@@ -22,16 +46,44 @@ interface QRLocation {
 
 const FloorPlanView: React.FC<FloorPlanViewProps> = ({ 
   inspections, 
+  qrCodes: propQrCodes = [],
   onSelectInspection, 
   onUpdateInspections,
   selectedInspectionId,
   onSelectionChange,
   selectedFloor: propSelectedFloor,
-  onFloorChange
+  onFloorChange,
+  showDetailPanel = true,
+  startInEditMode = false
 }) => {
   const [selectedInspection, setSelectedInspection] = useState<InspectionRecord | null>(null);
   const [hoveredInspection, setHoveredInspection] = useState<InspectionRecord | null>(null);
-  const [qrLocations, setQRLocations] = useState<QRLocation[]>([]);
+  // qrCodes prop → qrLocations (동적 데이터)
+  const qrLocations = useMemo(() => {
+    const locations: QRLocation[] = [];
+    propQrCodes.forEach((qr: QRCodeData) => {
+      try {
+        const qrData = JSON.parse(qr.qrData);
+        let position = { x: 50, y: 50 };
+        if (qrData.position && typeof qrData.position === 'object' && qrData.position.x != null && qrData.position.y != null) {
+          position = { x: qrData.position.x, y: qrData.position.y };
+        }
+        if (position.x >= 0 && position.x <= 100 && position.y >= 0 && position.y <= 100) {
+          locations.push({
+            id: `qr-${qr.id}`,
+            location: qr.location,
+            floor: qr.floor,
+            position,
+            qrId: qr.id
+          });
+        }
+      } catch {
+        // skip
+      }
+    });
+    return locations;
+  }, [propQrCodes]);
+  const savedQRCodesForMarkers = propQrCodes;
   const [isEditingInspectionPosition, setIsEditingInspectionPosition] = useState(false);
   const [editingPosition, setEditingPosition] = useState({ x: 0, y: 0 });
   const [panelPosition, setPanelPosition] = useState({ x: 0, y: 0 });
@@ -39,10 +91,12 @@ const FloorPlanView: React.FC<FloorPlanViewProps> = ({
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const [internalSelectedFloor, setInternalSelectedFloor] = useState<'F1' | 'B1'>('F1');
   const panelRef = useRef<HTMLDivElement>(null);
-  
+  /** 리스트/마커에서 다른 검사 항목을 선택했을 때만 층 동기화. 드롭다운으로 층만 바꾼 경우에는 덮어쓰지 않음 */
+  const prevSelectedInspectionIdRef = useRef<string | null>(null);
+
   // prop으로 전달된 층수가 있으면 사용, 없으면 내부 상태 사용
   const selectedFloor = propSelectedFloor ?? internalSelectedFloor;
-  
+
   const handleFloorChange = (floor: 'F1' | 'B1') => {
     if (onFloorChange) {
       onFloorChange(floor);
@@ -51,26 +105,110 @@ const FloorPlanView: React.FC<FloorPlanViewProps> = ({
     }
   };
 
-  // selectedInspectionId가 변경되면 해당 InspectionRecord 선택
+  // selectedInspectionId가 **다른 검사 항목으로** 변경될 때만 층 동기화 및 스크롤 (드롭다운으로 층만 바꾼 경우에는 유지)
   useEffect(() => {
     if (selectedInspectionId) {
-      const inspection = inspections.find(i => i.id === selectedInspectionId);
+      const inspection = inspections.find(i => i.panelNo === selectedInspectionId);
       if (inspection) {
-        setSelectedInspection(inspection);
-        // 패널 위치 초기화
-        setPanelPosition({ x: 0, y: 0 });
-        // 마커로 스크롤 (간단한 방법으로 처리)
-        setTimeout(() => {
-          const markerElement = document.querySelector(`[data-marker-id="${inspection.id}"]`);
-          if (markerElement) {
-            markerElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        const selectionChanged = prevSelectedInspectionIdRef.current !== selectedInspectionId;
+        prevSelectedInspectionIdRef.current = selectedInspectionId;
+
+        if (selectionChanged) {
+          // PNL NO.에서 층수 추출 (형식: 1, 2, 1-1, 2-1, 3-1-1 → 1=F1, 2=B1)
+          const idParts = inspection.panelNo.trim().split('-').map((p: string) => p.trim());
+          let inspectionFloor: 'F1' | 'B1' = 'F1';
+          const floorMap: { [key: string]: 'F1' | 'B1' | 'F2' | 'F3' | 'F4' | 'F5' | 'F6' | 'B2' } = {
+            '1': 'F1', '2': 'F2', '3': 'F3', '4': 'F4', '5': 'F5', '6': 'F6',
+            '7': 'B1', '8': 'B2',
+            'A': 'F1', 'B': 'B1', 'F1': 'F1', 'B1': 'B1',
+            'F2': 'F2', 'F3': 'F3', 'F4': 'F4', 'F5': 'F5', 'F6': 'F6', 'B2': 'B2',
+          };
+          if (idParts.length === 1 && idParts[0]) {
+            inspectionFloor = floorMap[idParts[0].toUpperCase()] || 'F1';
+          } else if (idParts.length >= 2) {
+            const first = idParts[0]?.toUpperCase() || '';
+            const second = idParts[1]?.toUpperCase() || '';
+            inspectionFloor = floorMap[first] || (idParts.length >= 3 ? (floorMap[second] || 'F1') : 'F1');
           }
-        }, 100);
+          const tabForFloor = floorToTab(inspectionFloor);
+          if (tabForFloor !== selectedFloor) {
+            handleFloorChange(tabForFloor);
+            setTimeout(() => scrollToMarker(inspection), 300);
+          } else {
+            scrollToMarker(inspection);
+          }
+        }
       }
     } else {
+      prevSelectedInspectionIdRef.current = null;
       setSelectedInspection(null);
     }
-  }, [selectedInspectionId, inspections]);
+  }, [selectedInspectionId, inspections, selectedFloor]);
+
+  // startInEditMode일 때 상세 패널이 열리면 위치 수정 모드로 시작
+  useEffect(() => {
+    if (startInEditMode && selectedInspection && onUpdateInspections) {
+      setIsEditingInspectionPosition(true);
+      setEditingPosition({
+        x: selectedInspection.position?.x ?? 50,
+        y: selectedInspection.position?.y ?? 50
+      });
+    }
+  }, [startInEditMode, selectedInspection?.panelNo]);
+
+  // 마커로 스크롤하는 헬퍼 함수
+  const scrollToMarker = (inspection: InspectionRecord) => {
+    // QRGenerator와 연동: 마커 선택 상태 동기화 및 Modal 표시
+    setSelectedInspection(inspection);
+    // 패널 위치 초기화
+    setPanelPosition({ x: 0, y: 0 });
+    
+    // 마커로 스크롤 수행 (여러 번 시도하여 확실하게)
+    const attemptScroll = (attempts: number = 0) => {
+      if (attempts > 5) return; // 최대 5번 시도
+      
+      setTimeout(() => {
+        const markerElement = document.querySelector(`[data-marker-id="${inspection.panelNo}"]`) as HTMLElement;
+        if (markerElement) {
+          // 마커가 보이는지 확인
+          const rect = markerElement.getBoundingClientRect();
+          const isVisible = rect.top >= 0 && rect.left >= 0 && 
+                           rect.bottom <= (window.innerHeight || document.documentElement.clientHeight) &&
+                           rect.right <= (window.innerWidth || document.documentElement.clientWidth);
+          
+          if (!isVisible || attempts === 0) {
+            // scrollIntoView 사용 (가장 확실한 방법)
+            markerElement.scrollIntoView({ 
+              behavior: 'smooth', 
+              block: 'center', 
+              inline: 'center' 
+            });
+          }
+        } else if (attempts < 5) {
+          // 마커가 아직 렌더링되지 않았으면 재시도
+          attemptScroll(attempts + 1);
+        }
+        
+        // QRGenerator 왼쪽 패널 내에서만 스크롤 (main 스크롤 방지)
+        const inspectionItem = document.querySelector(`[data-inspection-id="${inspection.panelNo}"]`) as HTMLElement;
+        if (inspectionItem) {
+          const scrollParent = inspectionItem.closest('.overflow-y-auto');
+          if (scrollParent) {
+            const parent = scrollParent as HTMLElement;
+            const itemTop = inspectionItem.offsetTop;
+            const itemHeight = inspectionItem.offsetHeight;
+            const parentHeight = parent.clientHeight;
+            const targetScroll = itemTop - parentHeight / 2 + itemHeight / 2;
+            parent.scrollTo({ top: Math.max(0, targetScroll), behavior: 'smooth' });
+          } else {
+            inspectionItem.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+          }
+        }
+      }, attempts === 0 ? 100 : 200); // 첫 시도는 100ms, 재시도는 200ms
+    };
+    
+    attemptScroll(0);
+  };
 
   // 패널 외부 클릭 감지
   useEffect(() => {
@@ -140,115 +278,13 @@ const FloorPlanView: React.FC<FloorPlanViewProps> = ({
     }
   }, [isDragging, dragStart, panelPosition]);
 
-  // Load QR mapping data from localStorage
-  useEffect(() => {
-    loadQRMappings();
-  }, []);
-
-  const loadQRMappings = () => {
-    try {
-      // Load dashboard mapping
-      const mappingData = localStorage.getItem('dashboard_qr_mapping');
-      if (mappingData) {
-        const mapping = JSON.parse(mappingData);
-        
-        // Parse position from QR data
-        let position = { x: 50, y: 50 }; // default
-        try {
-          const qrData = JSON.parse(mapping.qrData);
-          // Try to parse position from position object
-          if (qrData.position) {
-            if (typeof qrData.position === 'object' && qrData.position.x !== undefined && qrData.position.y !== undefined) {
-              position = { x: qrData.position.x, y: qrData.position.y };
-            } else if (typeof qrData.position === 'string') {
-              const match = qrData.position.match(/x[:\s]*(\d+)[,\s]*y[:\s]*(\d+)/i);
-              if (match) {
-                position = { x: parseFloat(match[1]), y: parseFloat(match[2]) };
-              }
-            }
-          }
-        } catch (e) {
-          console.error('Failed to parse QR position:', e);
-        }
-
-        const qrLocation: QRLocation = {
-          id: `qr-${mapping.qrId}`,
-          location: mapping.location,
-          floor: mapping.floor,
-          position: position,
-          qrId: mapping.qrId
-        };
-
-        setQRLocations([qrLocation]);
-      }
-
-      // Also load all saved QR codes and try to extract position info
-      const savedQRCodes = JSON.parse(localStorage.getItem('safetyguard_qrcodes') || '[]');
-      const additionalLocations: QRLocation[] = savedQRCodes
-        .map((qr: QRCodeData) => {
-          try {
-            const qrData = JSON.parse(qr.qrData);
-            let position = { x: 50, y: 50 };
-            
-            if (qrData.position) {
-              if (typeof qrData.position === 'object' && qrData.position.x !== undefined && qrData.position.y !== undefined) {
-                position = { x: qrData.position.x, y: qrData.position.y };
-              } else if (typeof qrData.position === 'string') {
-                const match = qrData.position.match(/x[:\s]*(\d+)[,\s]*y[:\s]*(\d+)/i);
-                if (match) {
-                  position = { x: parseFloat(match[1]), y: parseFloat(match[2]) };
-                }
-              }
-            }
-
-            // Only include if position coordinates are valid
-            if (position.x >= 0 && position.x <= 100 && position.y >= 0 && position.y <= 100) {
-              return {
-                id: `qr-${qr.id}`,
-                location: qr.location,
-                floor: qr.floor,
-                position: position,
-                qrId: qr.id
-              };
-            }
-            return null;
-          } catch (e) {
-            return null;
-          }
-        })
-        .filter((loc: QRLocation | null) => loc !== null);
-
-      // Merge with existing locations, avoiding duplicates
-      setQRLocations(prev => {
-        const merged = [...prev];
-        additionalLocations.forEach(newLoc => {
-          if (!merged.find(loc => loc.qrId === newLoc.qrId)) {
-            merged.push(newLoc);
-          }
-        });
-        return merged;
-      });
-    } catch (error) {
-      console.error('Failed to load QR mappings:', error);
-    }
-  };
-
-  // Refresh QR locations when component mounts or when storage changes
-  useEffect(() => {
-    const interval = setInterval(() => {
-      loadQRMappings();
-    }, 2000); // Check every 2 seconds
-
-    return () => clearInterval(interval);
-  }, []);
-
   const handleSaveInspectionPosition = () => {
     if (!selectedInspection || !onUpdateInspections) return;
 
     try {
       // InspectionRecord 위치 정보 업데이트
       const updatedInspections = inspections.map(inspection => 
-        inspection.id === selectedInspection.id
+        inspection.panelNo === selectedInspection.panelNo
           ? { ...inspection, position: { x: editingPosition.x, y: editingPosition.y } }
           : inspection
       );
@@ -295,8 +331,9 @@ const FloorPlanView: React.FC<FloorPlanViewProps> = ({
 
   const handleMarkerClick = (inspection: InspectionRecord) => {
     setSelectedInspection(inspection);
+    // QRGenerator와 연동: ID를 통해 양방향 동기화
     if (onSelectionChange) {
-      onSelectionChange(inspection.id);
+      onSelectionChange(inspection.panelNo);
     }
     if (onSelectInspection) {
       onSelectInspection(inspection);
@@ -366,7 +403,7 @@ const FloorPlanView: React.FC<FloorPlanViewProps> = ({
     // 선택된 inspection이 있으면 위치 업데이트
     if (selectedInspection && onUpdateInspections) {
       const updatedInspections = inspections.map(inspection => 
-        inspection.id === selectedInspection.id
+        inspection.panelNo === selectedInspection.panelNo
           ? { ...inspection, position: { x: clampedX, y: clampedY } }
           : inspection
       );
@@ -392,7 +429,7 @@ const FloorPlanView: React.FC<FloorPlanViewProps> = ({
         // 위치 업데이트
         if (onUpdateInspections) {
           const updatedInspections = inspections.map(inspection => 
-            inspection.id === nearestInspection.id
+            inspection.panelNo === nearestInspection.panelNo
               ? { ...inspection, position: { x: clampedX, y: clampedY } }
               : inspection
           );
@@ -415,8 +452,18 @@ const FloorPlanView: React.FC<FloorPlanViewProps> = ({
     return connected.length > 0 ? connected.join(', ') : 'None';
   };
 
-  // Filter inspections that have position data
-  const positionedInspections = inspections.filter(inspection => inspection.position);
+  // Filter inspections that have position data and remove duplicates by panelNo
+  const positionedInspections = useMemo(() => {
+    const seen = new Set<string>();
+    return inspections.filter(inspection => {
+      if (!inspection.position) return false;
+      if (seen.has(inspection.panelNo)) {
+        return false;
+      }
+      seen.add(inspection.panelNo);
+      return true;
+    });
+  }, [inspections]);
 
   // Combine inspections and QR locations for display
   // QR과 ID는 하나의 객체이므로 ID로 매칭하여 통합
@@ -428,14 +475,15 @@ const FloorPlanView: React.FC<FloorPlanViewProps> = ({
       data: InspectionRecord;
       qrLocation?: QRLocation;
     }> = [];
+    
+    // ID 기준으로 중복 제거를 위한 Set
+    const seenMarkerIds = new Set<string>();
 
-    // QR 코드 데이터에서 ID 매핑 생성
+    // QR 코드 데이터에서 ID 매핑 생성 (동적 데이터: propQrCodes)
     const qrMapByInspectionId = new Map<string, QRLocation>();
     qrLocations.forEach(qrLoc => {
       try {
-        // QR 코드 데이터에서 InspectionRecord ID 찾기
-        const savedQRCodes = JSON.parse(localStorage.getItem('safetyguard_qrcodes') || '[]');
-        const qrCode = savedQRCodes.find((qr: QRCodeData) => qr.id === qrLoc.qrId);
+        const qrCode = propQrCodes.find((qr: QRCodeData) => qr.id === qrLoc.qrId);
         if (qrCode) {
           const qrData = JSON.parse(qrCode.qrData);
           if (qrData.id) {
@@ -450,7 +498,7 @@ const FloorPlanView: React.FC<FloorPlanViewProps> = ({
     // InspectionRecord를 기준으로 마커 생성 (QR 정보 포함)
     positionedInspections.forEach(inspection => {
       if (inspection.position) {
-        const qrLocation = qrMapByInspectionId.get(inspection.id);
+        const qrLocation = qrMapByInspectionId.get(inspection.panelNo);
         
         // 층수 필터링: QR 코드의 층수 정보와 선택된 층이 일치하는 경우만 표시
         let shouldShow = false;
@@ -460,13 +508,12 @@ const FloorPlanView: React.FC<FloorPlanViewProps> = ({
           // QR 코드에 층수 정보가 있으면 그것을 사용
           markerFloor = qrLocation.floor;
         } else {
-          // QR 코드 정보가 없으면 savedQRCodes에서 직접 확인
+          // QR 코드 정보가 없으면 propQrCodes에서 직접 확인
           try {
-            const savedQRCodes = JSON.parse(localStorage.getItem('safetyguard_qrcodes') || '[]');
-            const qrCode = savedQRCodes.find((qr: QRCodeData) => {
+            const qrCode = propQrCodes.find((qr: QRCodeData) => {
               try {
                 const qrData = JSON.parse(qr.qrData);
-                return qrData.id === inspection.id;
+                return qrData.id === inspection.panelNo;
               } catch {
                 return false;
               }
@@ -480,34 +527,39 @@ const FloorPlanView: React.FC<FloorPlanViewProps> = ({
           }
         }
         
-        // QR 코드에 층수 정보가 없으면 ID에서 추출 (형식: DB-층수-위치)
-        if (!markerFloor && inspection.id) {
-          const idParts = inspection.id.split('-');
-          if (idParts.length >= 3) {
-            // DB-층수-위치 형식에서 층수 추출 (idParts[1]이 층수)
-            const floorFromId = idParts[1] || '';
-            // 층수 매핑: A -> F1, B -> B1 등
-            const floorMap: { [key: string]: string } = {
-              'A': 'F1',
-              'B': 'B1',
-              '1': 'F1',
-              'F1': 'F1',
-              '1st': 'F1',
-              'B1': 'B1'
-            };
-            markerFloor = floorMap[floorFromId.toUpperCase()] || floorFromId;
+        // QR 코드에 층수 정보가 없으면 PNL NO.에서 추출 (형식: 1, 2, 1-1, 2-1, 3-1-1 → 1=F1, 2=B1)
+        if (!markerFloor && inspection.panelNo) {
+          const idParts = inspection.panelNo.trim().split('-').map((p: string) => p.trim());
+          const floorMap: { [key: string]: string } = {
+            '1': 'F1', '2': 'F2', '3': 'F3', '4': 'F4', '5': 'F5', '6': 'F6',
+            '7': 'B1', '8': 'B2',
+            'A': 'F1', 'B': 'B1', 'F1': 'F1', 'B1': 'B1',
+            'F2': 'F2', 'F3': 'F3', 'F4': 'F4', 'F5': 'F5', 'F6': 'F6', 'B2': 'B2',
+          };
+          if (idParts.length === 1 && idParts[0]) {
+            markerFloor = floorMap[idParts[0].toUpperCase()] || 'F1';
+          } else if (idParts.length >= 2) {
+            const first = idParts[0]?.toUpperCase() || '';
+            const second = idParts[1]?.toUpperCase() || '';
+            markerFloor = floorMap[first] || (idParts.length >= 3 ? (floorMap[second] || 'F1') : 'F1');
           }
         }
         
-        // 층수 일치 확인
-        if (markerFloor && markerFloor === selectedFloor) {
+        // 층수 일치: F1 탭 = F1~F6, B1 탭 = B1~B2. QR/검사 데이터의 층이 숫자('1','7')여도 레이블로 정규화 후 비교
+        const normalizedFloor = toFloorLabel(markerFloor);
+        if (!normalizedFloor) {
+          shouldShow = true;
+        } else if (selectedFloor === 'F1' && UPPER_FLOORS.includes(normalizedFloor)) {
+          shouldShow = true;
+        } else if (selectedFloor === 'B1' && BASEMENT_FLOORS.includes(normalizedFloor)) {
           shouldShow = true;
         }
         
-        // 층수에 맞는 마커만 추가
-        if (shouldShow) {
+        // 층에 맞는 마커만 추가 (panelNo 중복 체크)
+        if (shouldShow && !seenMarkerIds.has(inspection.panelNo)) {
+          seenMarkerIds.add(inspection.panelNo);
           markers.push({
-            id: inspection.id,
+            id: inspection.panelNo,
             type: 'inspection',
             position: inspection.position,
             data: inspection,
@@ -518,7 +570,7 @@ const FloorPlanView: React.FC<FloorPlanViewProps> = ({
     });
     
     // 디버깅: 마커 개수 확인
-    console.log('Total markers for floor', selectedFloor, ':', markers.length, 'Positioned inspections:', positionedInspections.length);
+    console.log('Total markers for floor', selectedFloor, ':', markers.length, 'Positioned inspections:', positionedInspections.length, 'Unique IDs:', seenMarkerIds.size);
 
     return markers;
   }, [positionedInspections, qrLocations, selectedFloor]);
@@ -588,244 +640,58 @@ const FloorPlanView: React.FC<FloorPlanViewProps> = ({
           {allMarkers.map((marker) => {
             const { x, y } = marker.position;
             const inspection = marker.data;
-            const qrLocation = marker.qrLocation;
-            
             const statusColor = getStatusColor(inspection.status);
-            const isSelected = selectedInspection?.id === marker.id;
-            const isHovered = hoveredInspection?.id === marker.id;
-            
-            // 위젯 색상을 상태 색상으로 설정
-            const widgetColor = statusColor;
+            const isSelected = selectedInspection?.panelNo === marker.id;
+            const isHovered = hoveredInspection?.panelNo === marker.id;
 
             return (
               <div
                 key={marker.id}
                 data-marker-id={marker.id}
-                className="absolute transform -translate-x-1/2 -translate-y-1/2 transition-all"
+                data-inspection-id={inspection.panelNo}
+                data-selected={isSelected ? 'true' : 'false'}
+                className="absolute transform -translate-x-1/2 -translate-y-1/2 transition-transform cursor-pointer"
                 style={{
                   left: `${x}%`,
                   top: `${y}%`,
-                  padding: '8px', // hover 영역 확장
-                  cursor: 'default', // 기본 커서
-                  zIndex: 100, // 위젯을 최상위로
+                  padding: '6px',
+                  zIndex: 100,
                 }}
-                onClick={() => {
-                  handleMarkerClick(inspection);
-                }}
-                onMouseEnter={() => {
-                  setHoveredInspection(inspection);
-                }}
-                onMouseLeave={() => {
-                  setHoveredInspection(null);
-                }}
+                onClick={() => handleMarkerClick(inspection)}
+                onMouseEnter={() => setHoveredInspection(inspection)}
+                onMouseLeave={() => setHoveredInspection(null)}
               >
-                {/* 위젯 위치 표시 - 배경 하이라이트 */}
+                {/* panelNo 라벨 (점 위쪽) */}
                 <div
-                  className="absolute transform -translate-x-1/2 -translate-y-1/2 rounded-full"
+                  className="absolute left-1/2 -translate-x-1/2 whitespace-nowrap rounded px-2 py-0.5 text-[10px] font-semibold text-white shadow-sm"
                   style={{
-                    width: '60px',
-                    height: '60px',
-                    backgroundColor: `${widgetColor}20`,
-                    border: `3px dashed ${widgetColor}`,
-                    left: '50%',
-                    top: '50%',
-                    zIndex: 0,
-                    animation: 'pulse-ring 2s ease-in-out infinite',
-                  }}
-                />
-                {/* 위치 표시 십자가 */}
-                <div
-                  className="absolute transform -translate-x-1/2 -translate-y-1/2"
-                  style={{
-                    left: '50%',
-                    top: '50%',
-                    width: '2px',
-                    height: '40px',
-                    backgroundColor: widgetColor,
-                    zIndex: 1,
-                    opacity: 0.6,
-                  }}
-                />
-                <div
-                  className="absolute transform -translate-x-1/2 -translate-y-1/2"
-                  style={{
-                    left: '50%',
-                    top: '50%',
-                    width: '40px',
-                    height: '2px',
-                    backgroundColor: widgetColor,
-                    zIndex: 1,
-                    opacity: 0.6,
-                  }}
-                />
-                {/* 위치 번호 표시 */}
-                <div
-                  className="absolute transform -translate-x-1/2"
-                  style={{
-                    left: '50%',
-                    top: '-30px',
-                    backgroundColor: widgetColor,
-                    color: 'white',
-                    padding: '2px 8px',
-                    borderRadius: '12px',
-                    fontSize: '10px',
-                    fontWeight: 'bold',
-                    whiteSpace: 'nowrap',
-                    zIndex: 1,
-                    boxShadow: '0 2px 8px rgba(0, 0, 0, 0.3)',
+                    bottom: '100%',
+                    marginBottom: '4px',
+                    backgroundColor: statusColor,
                   }}
                 >
-                  {inspection.id}
+                  {inspection.panelNo}
                 </div>
-                {/* Marker */}
+                {/* 작은 점/원 */}
                 <div
-                  className="relative"
+                  className="rounded-full transition-transform"
                   style={{
-                    transform: isSelected || isHovered ? 'scale(1.3)' : 'scale(1)',
-                    transition: 'transform 0.2s',
+                    width: isSelected || isHovered ? '14px' : '10px',
+                    height: isSelected || isHovered ? '14px' : '10px',
+                    backgroundColor: statusColor,
+                    border: '2px solid white',
+                    boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
                   }}
-                >
-                  {/* Pulse animation for active markers */}
-                  {(isSelected || isHovered) && (
-                    <div
-                      className="absolute inset-0 rounded-full animate-ping opacity-75"
-                      style={{
-                        backgroundColor: statusColor,
-                        width: '32px',
-                        height: '32px',
-                        marginLeft: '-16px',
-                        marginTop: '-16px',
-                      }}
-                    />
-                  )}
-
-                  {/* Main marker - 빨간색 위젯 */}
-                  <div
-                    className="relative"
-                    style={{
-                      width: '25px',
-                      height: '15px',
-                      cursor: 'pointer',
-                      zIndex: 40,
-                      position: 'relative',
-                      pointerEvents: 'auto',
-                      display: 'block !important',
-                      visibility: 'visible !important',
-                      opacity: '1 !important',
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.cursor = 'pointer';
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.cursor = 'default';
-                    }}
-                  >
-                    {/* 외곽 글로우 링 - 빨간색 */}
-                    <div
-                      className="absolute rounded-full"
-                      style={{
-                        boxShadow: `0 0 0 2px ${widgetColor}, 0 0 8px ${widgetColor}, 0 0 16px ${widgetColor}CC`,
-                        animation: 'pulse-glow 1.5s ease-in-out infinite',
-                        zIndex: 1,
-                        width: '30px',
-                        height: '18px',
-                        left: '50%',
-                        top: '50%',
-                        transform: 'translate(-50%, -50%)',
-                        position: 'absolute',
-                        pointerEvents: 'none',
-                      }}
-                    />
-                    
-                    {/* 메인 위젯 컨테이너 - 빨간색 */}
-                    <div
-                      className="relative rounded-lg overflow-visible"
-                      style={{
-                        width: '25px',
-                        height: '15px',
-                        border: `0.5px solid ${widgetColor}`,
-                        backgroundColor: widgetColor,
-                        boxShadow: `0 0 0 0.5px white`,
-                        zIndex: 40,
-                        position: 'relative',
-                        pointerEvents: 'auto',
-                        display: 'block !important',
-                        visibility: 'visible !important',
-                        opacity: '1 !important',
-                      }}
-                    >
-                      {/* 빨간색 배경 */}
-                      <div
-                        className="absolute inset-0"
-                        style={{
-                          backgroundColor: widgetColor,
-                          zIndex: 1,
-                        }}
-                      />
-                      
-                    </div>
-                    
-                    {/* 선택/호버 시 추가 효과 - 빨간색 */}
-                    {(isSelected || isHovered) && (
-                      <div
-                        className="absolute rounded-full animate-ping"
-                        style={{
-                          backgroundColor: widgetColor,
-                          opacity: 0.5,
-                          zIndex: 0,
-                          width: '30px',
-                          height: '18px',
-                          left: '50%',
-                          top: '50%',
-                          transform: 'translate(-50%, -50%)',
-                          position: 'absolute',
-                        }}
-                      />
-                    )}
-                  </div>
-
-                  {/* 좌표 표시 - 선택된 마커에만 표시 */}
-                  {isSelected && (
-                    <div className="absolute top-full left-1/2 transform -translate-x-1/2 mt-2 px-2 py-1 bg-slate-900 text-white text-xs rounded shadow-lg whitespace-nowrap z-20">
-                      <div className="font-semibold">X: {x.toFixed(1)}%</div>
-                      <div className="font-semibold">Y: {y.toFixed(1)}%</div>
-                      <div className="absolute top-0 left-1/2 transform -translate-x-1/2 -translate-y-full">
-                        <div className="border-4 border-transparent border-b-slate-900"></div>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Tooltip on hover */}
-                  {isHovered && !isSelected && (
-                    <div 
-                      className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-3 py-2 bg-slate-900 text-white text-xs rounded-lg shadow-xl whitespace-nowrap z-30 pointer-events-none"
-                      onMouseEnter={() => {
-                        setHoveredInspection(inspection);
-                      }}
-                      onMouseLeave={() => {
-                        setHoveredInspection(null);
-                      }}
-                    >
-                      <div className="font-semibold mb-1">{inspection.id}</div>
-                      <div className="text-slate-300">{inspection.status}</div>
-                      {qrLocation && (
-                        <div className="text-purple-300 mt-1">QR: {qrLocation.location}</div>
-                      )}
-                      <div className="absolute bottom-0 left-1/2 transform -translate-x-1/2 translate-y-full">
-                        <div className="border-4 border-transparent border-t-slate-900"></div>
-                      </div>
-                    </div>
-                  )}
-                </div>
+                />
               </div>
             );
           })}
         </div>
 
-        {/* Selected Inspection Details Panel */}
-        {selectedInspection && (() => {
+        {/* Selected Inspection Details Panel (showDetailPanel=false면 목록 선택 시 모달 미표시) */}
+        {showDetailPanel && selectedInspection && (() => {
           // QR 정보 찾기
-          const qrLocation = allMarkers.find(m => m.id === selectedInspection.id)?.qrLocation;
+          const qrLocation = allMarkers.find(m => m.id === selectedInspection.panelNo)?.qrLocation;
           
           return (
           <>
@@ -853,7 +719,7 @@ const FloorPlanView: React.FC<FloorPlanViewProps> = ({
             >
             <div className="flex items-start justify-between mb-4">
               <div>
-                <h4 className="font-bold text-slate-800 text-lg mb-0.5">{selectedInspection.id}</h4>
+                <h4 className="font-bold text-slate-800 text-lg mb-0.5">{selectedInspection.panelNo}</h4>
                 <p className="text-sm text-slate-600">Distribution Board</p>
                 {qrLocation && (
                   <p className="text-xs text-purple-600 mt-1 flex items-center gap-1">

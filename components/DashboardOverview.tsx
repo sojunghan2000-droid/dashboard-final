@@ -156,13 +156,13 @@ const DashboardOverview: React.FC<DashboardOverviewProps> = ({
               <div className="space-y-3">
                 {recentInspections.map((inspection) => (
                   <div
-                    key={inspection.id}
+                    key={inspection.panelNo}
                     className="flex items-center justify-between p-3 rounded-lg border border-slate-100 hover:bg-slate-50 transition-colors"
                   >
                     <div className="flex items-center gap-3">
                       {getStatusIcon(inspection.status)}
                       <div>
-                        <p className="font-medium text-slate-800">{inspection.id}</p>
+                        <p className="font-medium text-slate-800">{inspection.panelNo}</p>
                         <p className="text-xs text-slate-500">
                           {inspection.lastInspectionDate !== '-' 
                             ? new Date(inspection.lastInspectionDate).toLocaleDateString()

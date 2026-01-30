@@ -8,7 +8,7 @@ interface BoardListProps {
   onSelect: (id: string) => void;
 }
 
-type SortField = 'id' | 'status' | 'lastInspectionDate' | null;
+type SortField = 'panelNo' | 'status' | 'lastInspectionDate' | null;
 type SortDirection = 'asc' | 'desc';
 
 const BoardList: React.FC<BoardListProps> = ({ items, selectedId, onSelect }) => {
@@ -34,9 +34,9 @@ const BoardList: React.FC<BoardListProps> = ({ items, selectedId, onSelect }) =>
       let bValue: any;
 
       switch (sortField) {
-        case 'id':
-          aValue = a.id;
-          bValue = b.id;
+        case 'panelNo':
+          aValue = a.panelNo;
+          bValue = b.panelNo;
           break;
         case 'status':
           // 상태 우선순위: Complete > In Progress > Pending
@@ -93,12 +93,15 @@ const BoardList: React.FC<BoardListProps> = ({ items, selectedId, onSelect }) =>
 
   return (
     <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden h-full flex flex-col">
-      <div className="p-4 border-b border-slate-100 bg-slate-50 flex justify-between items-center">
-        <h3 className="font-semibold text-slate-700 flex items-center gap-2">
-          <ClipboardList size={18} />
-          Board List
-        </h3>
-        <span className="text-xs bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full">{items.length} Items</span>
+      <div className="p-4 border-b border-slate-100 bg-slate-50">
+        <div className="flex justify-between items-center">
+          <h3 className="font-semibold text-slate-700 flex items-center gap-2">
+            <ClipboardList size={18} />
+            Board List
+          </h3>
+          <span className="text-xs bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full">{items.length} Items</span>
+        </div>
+        <p className="text-xs text-slate-500 mt-1.5">데이터는 DB Master에 등록된 분전함의 내용을 기반으로 생성됩니다.</p>
       </div>
       <div className="overflow-y-auto flex-1">
         <table className="w-full text-sm text-left">
@@ -106,10 +109,10 @@ const BoardList: React.FC<BoardListProps> = ({ items, selectedId, onSelect }) =>
             <tr>
               <th 
                 className="px-4 py-3 font-medium cursor-pointer hover:bg-slate-100 transition-colors select-none"
-                onDoubleClick={() => handleSort('id')}
+                onDoubleClick={() => handleSort('panelNo')}
                 title="더블 클릭하여 정렬"
               >
-                ID{getSortIcon('id')}
+                PNL NO.{getSortIcon('panelNo')}
               </th>
               <th 
                 className="px-4 py-3 font-medium cursor-pointer hover:bg-slate-100 transition-colors select-none"
@@ -130,14 +133,14 @@ const BoardList: React.FC<BoardListProps> = ({ items, selectedId, onSelect }) =>
           <tbody className="divide-y divide-slate-100">
             {sortedItems.map((item) => (
               <tr 
-                key={item.id}
-                onClick={() => onSelect(item.id)}
+                key={item.panelNo}
+                onClick={() => onSelect(item.panelNo)}
                 className={`
                   cursor-pointer transition-colors hover:bg-blue-50
-                  ${selectedId === item.id ? 'bg-blue-50 border-l-4 border-l-blue-500' : 'border-l-4 border-l-transparent'}
+                  ${selectedId === item.panelNo ? 'bg-blue-50 border-l-4 border-l-blue-500' : 'border-l-4 border-l-transparent'}
                 `}
               >
-                <td className="px-4 py-3 font-medium text-slate-800">{item.id}</td>
+                <td className="px-4 py-3 font-medium text-slate-800">{item.panelNo}</td>
                 <td className="px-4 py-3">
                   <div className="flex items-center gap-2">
                     {getStatusIcon(item.status)}
