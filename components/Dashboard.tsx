@@ -418,10 +418,14 @@ const Dashboard: React.FC<DashboardProps> = ({
         
         if (photosSheetName) {
           try {
-            // ExcelJS로 이미지 추출을 위해 파일을 다시 읽기
-            const exceljsWorkbook = new ExcelJS.Workbook();
-            await exceljsWorkbook.xlsx.load(data);
-            const photosSheet = exceljsWorkbook.getWorksheet(photosSheetName);
+                // ExcelJS로 이미지 추출을 위해 파일을 다시 읽기
+                const exceljsWorkbook = new ExcelJS.Workbook();
+                await exceljsWorkbook.xlsx.load(data);
+                const photosSheet = exceljsWorkbook.getWorksheet(photosSheetName);
+                
+                // workbook의 media 객체 확인 (이미지 데이터 저장소)
+                const media = (exceljsWorkbook as any).model?.media || [];
+                console.log(`Workbook media 개수: ${media.length}`);
             
             if (photosSheet) {
               // Photos 시트의 데이터 읽기 (XLSX로)
@@ -446,6 +450,15 @@ const Dashboard: React.FC<DashboardProps> = ({
                 const images = photosSheet.getImages();
                 console.log(`Photos 시트에서 ${images.length}개의 이미지 발견`);
                 
+                // 디버깅: 모든 이미지의 위치 정보 출력
+                images.forEach((img, idx) => {
+                  const imgTop = img.range.tl.nativeRow;
+                  const imgBottom = img.range.br.nativeRow;
+                  const imgLeft = img.range.tl.nativeCol;
+                  const imgRight = img.range.br.nativeCol;
+                  console.log(`이미지 ${idx + 1}: 행 ${imgTop + 1}-${imgBottom + 1}, 열 ${imgLeft + 1}-${imgRight + 1} (nativeRow: ${imgTop}-${imgBottom}, nativeCol: ${imgLeft}-${imgRight})`);
+                });
+                
                 // 각 행의 이미지 추출 (헤더 제외, 2행부터 시작)
                 for (let dataRowIndex = 1; dataRowIndex < photosData.length; dataRowIndex++) {
                   const row = photosData[dataRowIndex];
@@ -457,8 +470,9 @@ const Dashboard: React.FC<DashboardProps> = ({
                   
                   if (!panelNo || !hasPhoto) continue;
                   
-                  // ExcelJS 행 번호는 1-based이고, 헤더가 1행이므로 데이터는 2행부터
-                  const excelRowNum = dataRowIndex + 2; // 헤더(1행) + 인덱스 보정
+                  // ExcelJS 행 번호는 0-based이므로, 헤더가 0행, 데이터는 1행부터
+                  // 하지만 Excel 시트에서는 1-based이므로, 헤더가 1행, 데이터는 2행부터
+                  const excelRowNum = dataRowIndex + 1; // ExcelJS의 nativeRow는 0-based
                   
                   // 해당 inspection 찾기
                   const inspectionIndex = updatedInspections.findIndex(ins => ins.panelNo === panelNo);
@@ -469,71 +483,225 @@ const Dashboard: React.FC<DashboardProps> = ({
                   
                   // 이미지 찾기 (C열 또는 D열에 있을 수 있음, 3열 또는 4열)
                   // 이미지가 해당 행 범위에 있는지 확인
+                  // ExcelJS의 nativeRow와 nativeCol은 0-based입니다
                   const imageForRow = images.find(img => {
-                    // ExcelJS의 range는 0-based
-                    const imgTop = img.range.tl.nativeRow + 1; // 0-based를 1-based로 변환
-                    const imgBottom = img.range.br.nativeRow + 1;
-                    const imgLeft = img.range.tl.nativeCol + 1; // 0-based를 1-based로 변환 (A=1, B=2, C=3, D=4)
-                    const imgRight = img.range.br.nativeCol + 1;
+                    const imgTop = img.range.tl.nativeRow; // 0-based
+                    const imgBottom = img.range.br.nativeRow; // 0-based
+                    const imgLeft = img.range.tl.nativeCol; // 0-based (A=0, B=1, C=2, D=3)
+                    const imgRight = img.range.br.nativeCol; // 0-based
                     
-                    // 이미지가 C열(3열) 또는 D열(4열)에 있고, 행 범위에 포함되는지 확인
-                    const isInColumn = (imgLeft <= 3 && imgRight >= 3) || (imgLeft <= 4 && imgRight >= 4);
+                    // 이미지가 C열(2) 또는 D열(3)에 있고, 행 범위에 포함되는지 확인
+                    // 행 매칭: 현재 행이 이미지 범위 내에 있는지 확인 (약간의 여유를 둠)
+                    const isInColumn = (imgLeft <= 2 && imgRight >= 2) || (imgLeft <= 3 && imgRight >= 3);
                     const isInRow = imgTop <= excelRowNum && excelRowNum <= imgBottom;
+                    
+                    if (isInColumn && isInRow) {
+                      console.log(`이미지 매칭 성공: PNL NO ${panelNo}, 행 ${excelRowNum + 1} (ExcelJS: ${excelRowNum}), 이미지 범위 행 ${imgTop + 1}-${imgBottom + 1}, 열 ${imgLeft + 1}-${imgRight + 1}`);
+                      // 이미지 객체 확인
+                      console.log(`이미지 객체:`, { 
+                        hasImage: !!img.image, 
+                        imageType: typeof img.image,
+                        imageKeys: img.image ? Object.keys(img.image) : []
+                      });
+                    }
                     
                     return isInColumn && isInRow;
                   });
                   
-                  if (imageForRow && imageForRow.image) {
+                  // 이미지 객체 확인 및 처리
+                  if (imageForRow) {
                     try {
-                      // 이미지를 Base64로 변환 (브라우저 호환)
-                      const imageBuffer = imageForRow.image.buffer;
-                      // ArrayBuffer를 Base64로 변환
-                      const bytes = new Uint8Array(imageBuffer);
-                      let binary = '';
-                      for (let i = 0; i < bytes.length; i++) {
-                        binary += String.fromCharCode(bytes[i]);
-                      }
-                      const base64 = btoa(binary);
-                      const extension = imageForRow.image.extension || 'png';
-                      const dataUrl = `data:image/${extension};base64,${base64}`;
+                      // ExcelJS의 이미지 객체는 imageId를 가지고 있음
+                      const imageId = (imageForRow as any).imageId;
+                      console.log(`PNL NO ${panelNo}: imageId = ${imageId}`);
                       
-                      // Blob으로 변환하여 IndexedDB에 저장
-                      const blob = dataURLToBlob(dataUrl);
+                      // workbook의 media 배열에서 이미지 찾기
+                      const media = (exceljsWorkbook as any).model?.media || [];
+                      let imageData: any = null;
                       
-                      if (photoType.includes('현장사진') || photoType.toLowerCase().includes('site') || !photoType.includes('열화상')) {
-                        // 현장사진 저장
-                        updatedInspections[inspectionIndex].photoUrl = dataUrl;
-                        const existingThermalBlob = updatedInspections[inspectionIndex].thermalImage?.imageUrl
-                          ? dataURLToBlob(updatedInspections[inspectionIndex].thermalImage.imageUrl)
-                          : null;
-                        await savePhoto(panelNo, blob, existingThermalBlob);
-                        console.log(`현장사진 저장 완료: ${panelNo}`);
-                      } else if (photoType.includes('열화상') || photoType.toLowerCase().includes('thermal')) {
-                        // 열화상 이미지 저장
-                        if (!updatedInspections[inspectionIndex].thermalImage) {
-                          updatedInspections[inspectionIndex].thermalImage = {
-                            imageUrl: dataUrl,
-                            temperature: 0,
-                            maxTemp: 0,
-                            minTemp: 0,
-                            emissivity: 0.95,
-                            measurementTime: new Date().toISOString(),
-                            equipment: ''
-                          };
+                      if (imageId !== undefined && media[imageId]) {
+                        imageData = media[imageId];
+                        console.log(`이미지 데이터 찾음: imageId ${imageId}, 타입: ${imageData.type || 'unknown'}`);
+                      } else {
+                        // imageId로 직접 찾기 시도
+                        const foundMedia = media.find((m: any, idx: number) => idx === imageId);
+                        if (foundMedia) {
+                          imageData = foundMedia;
+                          console.log(`이미지 데이터 찾음 (직접 검색): imageId ${imageId}`);
                         } else {
-                          updatedInspections[inspectionIndex].thermalImage.imageUrl = dataUrl;
+                          console.warn(`PNL NO ${panelNo}: imageId ${imageId}에 해당하는 이미지 데이터를 찾을 수 없습니다.`);
+                          console.log(`사용 가능한 media 인덱스: 0-${media.length - 1}`);
                         }
-                        const existingPhotoBlob = updatedInspections[inspectionIndex].photoUrl
-                          ? dataURLToBlob(updatedInspections[inspectionIndex].photoUrl)
-                          : null;
-                        await savePhoto(panelNo, existingPhotoBlob, blob);
-                        console.log(`열화상 이미지 저장 완료: ${panelNo}`);
+                      }
+                      
+                      if (imageData) {
+                        // 이미지 데이터에서 buffer 또는 base64 추출
+                        let imageBuffer: ArrayBuffer | null = null;
+                        let extension = 'png';
+                        
+                        // buffer 속성 확인
+                        if (imageData.buffer) {
+                          imageBuffer = imageData.buffer;
+                        } else if (imageData.base64) {
+                          // base64가 직접 있는 경우
+                          const base64 = imageData.base64;
+                          extension = imageData.extension || 'png';
+                          const dataUrl = `data:image/${extension};base64,${base64}`;
+                          const blob = dataURLToBlob(dataUrl);
+                          
+                          if (photoType.includes('현장사진') || photoType.toLowerCase().includes('site') || !photoType.includes('열화상')) {
+                            updatedInspections[inspectionIndex].photoUrl = dataUrl;
+                            const existingThermalBlob = updatedInspections[inspectionIndex].thermalImage?.imageUrl
+                              ? dataURLToBlob(updatedInspections[inspectionIndex].thermalImage.imageUrl)
+                              : null;
+                            await savePhoto(panelNo, blob, existingThermalBlob);
+                            console.log(`현장사진 저장 완료: ${panelNo}`);
+                          } else if (photoType.includes('열화상') || photoType.toLowerCase().includes('thermal')) {
+                            if (!updatedInspections[inspectionIndex].thermalImage) {
+                              updatedInspections[inspectionIndex].thermalImage = {
+                                imageUrl: dataUrl,
+                                temperature: 0,
+                                maxTemp: 0,
+                                minTemp: 0,
+                                emissivity: 0.95,
+                                measurementTime: new Date().toISOString(),
+                                equipment: ''
+                              };
+                            } else {
+                              updatedInspections[inspectionIndex].thermalImage.imageUrl = dataUrl;
+                            }
+                            const existingPhotoBlob = updatedInspections[inspectionIndex].photoUrl
+                              ? dataURLToBlob(updatedInspections[inspectionIndex].photoUrl)
+                              : null;
+                            await savePhoto(panelNo, existingPhotoBlob, blob);
+                            console.log(`열화상 이미지 저장 완료: ${panelNo}`);
+                          }
+                          continue; // base64 처리 완료, 다음 행으로
+                        } else {
+                          console.warn(`PNL NO ${panelNo}: 이미지 데이터에 buffer나 base64가 없습니다.`, imageData);
+                        }
+                        
+                        // buffer가 있는 경우 처리
+                        if (imageBuffer) {
+                          // ArrayBuffer를 Base64로 변환
+                          const bytes = new Uint8Array(imageBuffer);
+                          let binary = '';
+                          for (let i = 0; i < bytes.length; i++) {
+                            binary += String.fromCharCode(bytes[i]);
+                          }
+                          const base64 = btoa(binary);
+                          extension = imageData.extension || 'png';
+                          const dataUrl = `data:image/${extension};base64,${base64}`;
+                          
+                          // Blob으로 변환하여 IndexedDB에 저장
+                          const blob = dataURLToBlob(dataUrl);
+                          
+                          if (photoType.includes('현장사진') || photoType.toLowerCase().includes('site') || !photoType.includes('열화상')) {
+                            // 현장사진 저장
+                            updatedInspections[inspectionIndex].photoUrl = dataUrl;
+                            const existingThermalBlob = updatedInspections[inspectionIndex].thermalImage?.imageUrl
+                              ? dataURLToBlob(updatedInspections[inspectionIndex].thermalImage.imageUrl)
+                              : null;
+                            await savePhoto(panelNo, blob, existingThermalBlob);
+                            console.log(`현장사진 저장 완료: ${panelNo}`);
+                          } else if (photoType.includes('열화상') || photoType.toLowerCase().includes('thermal')) {
+                            // 열화상 이미지 저장
+                            if (!updatedInspections[inspectionIndex].thermalImage) {
+                              updatedInspections[inspectionIndex].thermalImage = {
+                                imageUrl: dataUrl,
+                                temperature: 0,
+                                maxTemp: 0,
+                                minTemp: 0,
+                                emissivity: 0.95,
+                                measurementTime: new Date().toISOString(),
+                                equipment: ''
+                              };
+                            } else {
+                              updatedInspections[inspectionIndex].thermalImage.imageUrl = dataUrl;
+                            }
+                            const existingPhotoBlob = updatedInspections[inspectionIndex].photoUrl
+                              ? dataURLToBlob(updatedInspections[inspectionIndex].photoUrl)
+                              : null;
+                            await savePhoto(panelNo, existingPhotoBlob, blob);
+                            console.log(`열화상 이미지 저장 완료: ${panelNo}`);
+                          }
+                        }
+                      } else {
+                        console.warn(`PNL NO ${panelNo}: 이미지 데이터를 찾을 수 없습니다.`);
                       }
                     } catch (error) {
                       console.error(`이미지 추출 오류 (${panelNo}, ${photoType}):`, error);
                     }
                   } else {
-                    console.warn(`PNL NO ${panelNo}의 ${photoType} 이미지를 찾을 수 없습니다. (행 ${excelRowNum}, 전체 이미지 수: ${images.length})`);
+                    // 이미지를 찾지 못한 경우, 더 넓은 범위로 검색 시도
+                    const imageForRowWide = images.find(img => {
+                      const imgTop = img.range.tl.nativeRow;
+                      const imgBottom = img.range.br.nativeRow;
+                      const imgLeft = img.range.tl.nativeCol;
+                      const imgRight = img.range.br.nativeCol;
+                      
+                      // 더 넓은 범위로 검색 (행 ±1, 열 C-D)
+                      const isInColumn = (imgLeft <= 3 && imgRight >= 2);
+                      const isInRow = Math.abs(imgTop - excelRowNum) <= 1 || Math.abs(imgBottom - excelRowNum) <= 1;
+                      
+                      return isInColumn && isInRow;
+                    });
+                    
+                    if (imageForRowWide && imageForRowWide.image) {
+                      console.log(`이미지 매칭 성공 (넓은 범위): PNL NO ${panelNo}, 행 ${excelRowNum + 1}`);
+                      // 이미지 처리 로직은 동일
+                      try {
+                        const imageBuffer = imageForRowWide.image.buffer;
+                        const bytes = new Uint8Array(imageBuffer);
+                        let binary = '';
+                        for (let i = 0; i < bytes.length; i++) {
+                          binary += String.fromCharCode(bytes[i]);
+                        }
+                        const base64 = btoa(binary);
+                        const extension = imageForRowWide.image.extension || 'png';
+                        const dataUrl = `data:image/${extension};base64,${base64}`;
+                        const blob = dataURLToBlob(dataUrl);
+                        
+                        if (photoType.includes('현장사진') || photoType.toLowerCase().includes('site') || !photoType.includes('열화상')) {
+                          updatedInspections[inspectionIndex].photoUrl = dataUrl;
+                          const existingThermalBlob = updatedInspections[inspectionIndex].thermalImage?.imageUrl
+                            ? dataURLToBlob(updatedInspections[inspectionIndex].thermalImage.imageUrl)
+                            : null;
+                          await savePhoto(panelNo, blob, existingThermalBlob);
+                          console.log(`현장사진 저장 완료: ${panelNo}`);
+                        } else if (photoType.includes('열화상') || photoType.toLowerCase().includes('thermal')) {
+                          if (!updatedInspections[inspectionIndex].thermalImage) {
+                            updatedInspections[inspectionIndex].thermalImage = {
+                              imageUrl: dataUrl,
+                              temperature: 0,
+                              maxTemp: 0,
+                              minTemp: 0,
+                              emissivity: 0.95,
+                              measurementTime: new Date().toISOString(),
+                              equipment: ''
+                            };
+                          } else {
+                            updatedInspections[inspectionIndex].thermalImage.imageUrl = dataUrl;
+                          }
+                          const existingPhotoBlob = updatedInspections[inspectionIndex].photoUrl
+                            ? dataURLToBlob(updatedInspections[inspectionIndex].photoUrl)
+                            : null;
+                          await savePhoto(panelNo, existingPhotoBlob, blob);
+                          console.log(`열화상 이미지 저장 완료: ${panelNo}`);
+                        }
+                      } catch (error) {
+                        console.error(`이미지 추출 오류 (${panelNo}, ${photoType}):`, error);
+                      }
+                    } else {
+                      console.warn(`PNL NO ${panelNo}의 ${photoType} 이미지를 찾을 수 없습니다. (행 ${excelRowNum + 1} (ExcelJS: ${excelRowNum}), 전체 이미지 수: ${images.length})`);
+                      // 사용 가능한 이미지 위치 정보 출력
+                      if (images.length > 0) {
+                        console.log('사용 가능한 이미지 위치:');
+                        images.forEach((img, idx) => {
+                          console.log(`  이미지 ${idx + 1}: 행 ${img.range.tl.nativeRow + 1}-${img.range.br.nativeRow + 1}, 열 ${img.range.tl.nativeCol + 1}-${img.range.br.nativeCol + 1}`);
+                        });
+                      }
+                    }
                   }
                 }
                 
@@ -676,13 +844,32 @@ const Dashboard: React.FC<DashboardProps> = ({
                     let htmlContent = '';
                     if (htmlContentBase64Index >= 0 && row[htmlContentBase64Index]) {
                       try {
-                        const base64Content = String(row[htmlContentBase64Index] || '').trim();
-                        if (base64Content) {
-                          // Base64 디코딩
-                          htmlContent = decodeURIComponent(escape(atob(base64Content)));
+                        let base64Content = String(row[htmlContentBase64Index] || '').trim();
+                        
+                        // Base64 문자열 정리 (공백, 줄바꿈 제거)
+                        base64Content = base64Content.replace(/\s+/g, '');
+                        
+                        // 빈 문자열 체크
+                        if (!base64Content || base64Content === '-') {
+                          throw new Error('Base64 콘텐츠가 비어있습니다.');
+                        }
+                        
+                        // Base64 형식 검증 (Base64는 A-Z, a-z, 0-9, +, /, = 만 포함)
+                        const base64Regex = /^[A-Za-z0-9+/]*={0,2}$/;
+                        if (!base64Regex.test(base64Content)) {
+                          throw new Error('유효하지 않은 Base64 형식입니다.');
+                        }
+                        
+                        // Base64 디코딩
+                        htmlContent = decodeURIComponent(escape(atob(base64Content)));
+                        
+                        // 디코딩된 HTML이 비어있는지 확인
+                        if (!htmlContent || htmlContent.trim().length === 0) {
+                          throw new Error('디코딩된 HTML 콘텐츠가 비어있습니다.');
                         }
                       } catch (error) {
                         console.error('HTML 콘텐츠 디코딩 오류:', error);
+                        console.log('Base64 콘텐츠 (처음 100자):', String(row[htmlContentBase64Index] || '').substring(0, 100));
                         // 디코딩 실패 시 기존 방식으로 HTML 생성
                         htmlContent = generateHtmlFromData(
                           reportId,

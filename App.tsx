@@ -187,11 +187,35 @@ const App: React.FC = () => {
 
           // 사진이 있으면 Blob으로 변환하여 저장
           if (inspection.photoUrl) {
-            const photoBlob = dataURLToBlob(inspection.photoUrl);
-            const thermalImageBlob = inspection.thermalImage?.imageUrl
-              ? dataURLToBlob(inspection.thermalImage.imageUrl)
-              : null;
-            await savePhoto(inspection.panelNo, photoBlob, thermalImageBlob);
+            try {
+              // Data URL 형식인지 확인
+              if (inspection.photoUrl.startsWith('data:image')) {
+                const photoBlob = dataURLToBlob(inspection.photoUrl);
+                let thermalImageBlob: Blob | null = null;
+                
+                if (inspection.thermalImage?.imageUrl) {
+                  if (inspection.thermalImage.imageUrl.startsWith('data:image')) {
+                    thermalImageBlob = dataURLToBlob(inspection.thermalImage.imageUrl);
+                  } else {
+                    console.warn(`PNL NO ${inspection.panelNo}: thermalImage.imageUrl이 Data URL 형식이 아닙니다. 저장하지 않습니다.`);
+                  }
+                }
+                
+                await savePhoto(inspection.panelNo, photoBlob, thermalImageBlob);
+              } else {
+                // 일반 URL인 경우 저장하지 않음 (IndexedDB에는 Blob만 저장)
+                console.warn(`PNL NO ${inspection.panelNo}: photoUrl이 Data URL 형식이 아닙니다. 저장하지 않습니다.`);
+                await savePhoto(inspection.panelNo, null, null);
+              }
+            } catch (error) {
+              console.error(`PNL NO ${inspection.panelNo} 사진 저장 오류:`, error);
+              // 사진 저장 실패해도 계속 진행
+              try {
+                await savePhoto(inspection.panelNo, null, null);
+              } catch (saveError) {
+                console.error(`PNL NO ${inspection.panelNo} 사진 삭제 오류:`, saveError);
+              }
+            }
           } else {
             // 사진이 없으면 null로 저장 (덮어쓰기)
             await savePhoto(inspection.panelNo, null, null);

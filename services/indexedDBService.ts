@@ -145,15 +145,51 @@ export const blobToDataURL = (blob: Blob): Promise<string> => {
  * Data URL을 Blob으로 변환
  */
 export const dataURLToBlob = (dataURL: string): Blob => {
-  const arr = dataURL.split(',');
-  const mime = arr[0].match(/:(.*?);/)?.[1] || 'image/jpeg';
-  const bstr = atob(arr[1]);
-  let n = bstr.length;
-  const u8arr = new Uint8Array(n);
-  while (n--) {
-    u8arr[n] = bstr.charCodeAt(n);
+  // null, undefined, 빈 문자열 체크
+  if (!dataURL || typeof dataURL !== 'string') {
+    throw new Error('Invalid dataURL: dataURL is empty or not a string');
   }
-  return new Blob([u8arr], { type: mime });
+  
+  // Data URL 형식 검증
+  if (!dataURL.startsWith('data:')) {
+    throw new Error(`Invalid dataURL format: expected data: URL, got: ${dataURL.substring(0, 50)}...`);
+  }
+  
+  const arr = dataURL.split(',');
+  
+  // 콤마가 없거나 Base64 부분이 없는 경우
+  if (arr.length < 2 || !arr[1]) {
+    throw new Error('Invalid dataURL: missing base64 data');
+  }
+  
+  const mime = arr[0].match(/:(.*?);/)?.[1] || 'image/jpeg';
+  const base64String = arr[1];
+  
+  // Base64 문자열 정리 (공백, 줄바꿈 제거)
+  const cleanBase64 = base64String.replace(/\s+/g, '');
+  
+  // 빈 문자열 체크
+  if (!cleanBase64 || cleanBase64 === '-') {
+    throw new Error('Invalid dataURL: base64 data is empty');
+  }
+  
+  // Base64 형식 검증
+  const base64Regex = /^[A-Za-z0-9+/]*={0,2}$/;
+  if (!base64Regex.test(cleanBase64)) {
+    throw new Error(`Invalid base64 format: contains invalid characters`);
+  }
+  
+  try {
+    const bstr = atob(cleanBase64);
+    let n = bstr.length;
+    const u8arr = new Uint8Array(n);
+    while (n--) {
+      u8arr[n] = bstr.charCodeAt(n);
+    }
+    return new Blob([u8arr], { type: mime });
+  } catch (error) {
+    throw new Error(`Failed to decode base64: ${error instanceof Error ? error.message : String(error)}`);
+  }
 };
 
 /**

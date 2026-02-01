@@ -8,7 +8,7 @@ interface StatsChartProps {
 
 const StatsChart: React.FC<StatsChartProps> = ({ data }) => {
   return (
-    <div className="w-full h-full min-h-[200px]">
+    <div className="w-full" style={{ height: '256px', minHeight: '200px' }}>
       <ResponsiveContainer width="100%" height="100%">
         <PieChart>
           <Pie

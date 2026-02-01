@@ -70,7 +70,7 @@ const InspectionDetail: React.FC<InspectionDetailProps> = ({ record, onSave, onG
       console.error('Error updating formData from record:', error);
       // 에러 발생 시에도 기본값으로 설정
       const currentRecord = record || safeRecord;
-      setFormData({
+    setFormData({
         ...currentRecord,
         position: currentRecord.position || { x: 50, y: 50 }
       });
