@@ -11,6 +11,7 @@ import ErrorBoundary from './components/ErrorBoundary';
 import { LayoutDashboard, ScanLine, Bell, Menu, ShieldCheck, ClipboardList, BarChart3, QrCode, X, FileSpreadsheet, FileUp } from 'lucide-react';
 import { initIndexedDB, getAllInspectionsWithPhotos, saveInspection, savePhoto, dataURLToBlob } from './services/indexedDBService';
 import { exportToExcel } from './services/excelService';
+import ExportReviewModal from './components/ExportReviewModal';
 import * as XLSX from 'xlsx';
 
 /** PNL NO. 형식: 층 1=F1, 2=F2, 3=F3, 4=F4, 5=F5, 6=F6, 7=B1, 8=B2 / TR 1=A, 2=B, 3=C, 4=D. 80% F1 또는 B1, 20% 그 외 층 */
@@ -129,6 +130,7 @@ const App: React.FC = () => {
   const [reports, setReports] = useState<ReportHistory[]>([]);
   const [isExporting, setIsExporting] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
+  const [showExportPreview, setShowExportPreview] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // IndexedDB 초기화 및 데이터 로드
@@ -185,31 +187,30 @@ const App: React.FC = () => {
           // Inspection 데이터 저장
           await saveInspection(inspection);
 
-          // 사진이 있으면 Blob으로 변환하여 저장
-          if (inspection.photoUrl) {
+          // 사진이 있으면 Blob으로 변환하여 저장 (현장사진 또는 열화상 중 하나라도 있으면 저장)
+          const hasPhotoUrl = inspection.photoUrl?.startsWith?.('data:image');
+          const hasThermalUrl = inspection.thermalImage?.imageUrl?.startsWith?.('data:image');
+
+          if (hasPhotoUrl || hasThermalUrl) {
             try {
-              // Data URL 형식인지 확인
-              if (inspection.photoUrl.startsWith('data:image')) {
-                const photoBlob = dataURLToBlob(inspection.photoUrl);
-                let thermalImageBlob: Blob | null = null;
-                
-                if (inspection.thermalImage?.imageUrl) {
-                  if (inspection.thermalImage.imageUrl.startsWith('data:image')) {
-                    thermalImageBlob = dataURLToBlob(inspection.thermalImage.imageUrl);
-                  } else {
-                    console.warn(`PNL NO ${inspection.panelNo}: thermalImage.imageUrl이 Data URL 형식이 아닙니다. 저장하지 않습니다.`);
-                  }
-                }
-                
-                await savePhoto(inspection.panelNo, photoBlob, thermalImageBlob);
-              } else {
-                // 일반 URL인 경우 저장하지 않음 (IndexedDB에는 Blob만 저장)
+              let photoBlob: Blob | null = null;
+              let thermalImageBlob: Blob | null = null;
+
+              if (hasPhotoUrl) {
+                photoBlob = dataURLToBlob(inspection.photoUrl!);
+              } else if (inspection.photoUrl && !inspection.photoUrl.startsWith('data:image')) {
                 console.warn(`PNL NO ${inspection.panelNo}: photoUrl이 Data URL 형식이 아닙니다. 저장하지 않습니다.`);
-                await savePhoto(inspection.panelNo, null, null);
               }
+
+              if (hasThermalUrl) {
+                thermalImageBlob = dataURLToBlob(inspection.thermalImage!.imageUrl!);
+              } else if (inspection.thermalImage?.imageUrl && !inspection.thermalImage.imageUrl.startsWith('data:image')) {
+                console.warn(`PNL NO ${inspection.panelNo}: thermalImage.imageUrl이 Data URL 형식이 아닙니다. 저장하지 않습니다.`);
+              }
+
+              await savePhoto(inspection.panelNo, photoBlob, thermalImageBlob);
             } catch (error) {
               console.error(`PNL NO ${inspection.panelNo} 사진 저장 오류:`, error);
-              // 사진 저장 실패해도 계속 진행
               try {
                 await savePhoto(inspection.panelNo, null, null);
               } catch (saveError) {
@@ -329,10 +330,24 @@ const App: React.FC = () => {
   }, [selectedInspectionId, setInspections, setShowScanner]);
 
   return (
-    <div className="flex h-screen bg-slate-50 text-slate-800 overflow-hidden font-sans">
+    <div className="flex h-screen min-h-[100dvh] bg-slate-50 text-slate-800 overflow-hidden font-sans">
       
-      {/* Sidebar */}
-      <aside className={`${isSidebarOpen ? 'w-64' : 'w-0'} bg-slate-900 text-white transition-all duration-300 flex flex-col overflow-hidden shadow-xl z-20`}>
+      {/* 모바일: 사이드바 열릴 때 배경 클릭 시 닫기 */}
+      {isSidebarOpen && (
+        <div
+          className="fixed inset-0 bg-black/50 z-40 md:hidden"
+          onClick={() => setIsSidebarOpen(false)}
+          aria-hidden="true"
+        />
+      )}
+      
+      {/* Sidebar - 모바일: 오버레이, 데스크톱: 인라인 */}
+      <aside className={`
+        ${isSidebarOpen ? 'translate-x-0 w-64' : '-translate-x-full w-0 md:translate-x-0'}
+        ${isSidebarOpen ? 'md:w-64' : 'md:w-0'}
+        fixed md:relative inset-y-0 left-0 z-50 md:z-20
+        bg-slate-900 text-white transition-all duration-300 flex flex-col overflow-hidden shadow-xl
+      `}>
         <div className="p-6 border-b border-slate-800 flex items-center gap-3">
           <div 
             className="w-8 h-8 bg-blue-500 rounded-lg flex items-center justify-center shrink-0 cursor-pointer hover:bg-blue-600 transition-colors"
@@ -402,32 +417,20 @@ const App: React.FC = () => {
       </aside>
 
       {/* Main Content */}
-      <div className="flex-1 flex flex-col h-screen overflow-hidden relative">
+      <div className="flex-1 flex flex-col min-h-0 h-screen overflow-hidden relative">
         
         {/* Topbar */}
-        <header className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-6 shadow-sm z-10">
-          <div className="flex items-center gap-4">
-            <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-2 hover:bg-slate-100 rounded-lg text-slate-600">
+        <header className="h-16 min-h-[44px] shrink-0 bg-white border-b border-slate-200 flex items-center justify-between px-4 md:px-6 shadow-sm z-10">
+          <div className="flex items-center gap-2 md:gap-4 min-w-0">
+            <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-2 hover:bg-slate-100 rounded-lg text-slate-600 shrink-0 min-h-[44px] min-w-[44px] flex items-center justify-center">
               <Menu size={20} />
             </button>
-            <h2 className="text-lg font-semibold text-slate-800">Distribution Board Manager</h2>
+            <h2 className="text-sm md:text-lg font-semibold text-slate-800 truncate">Distribution Board Manager</h2>
           </div>
           <div className="flex items-center gap-4">
             {/* 엑셀 내보내기 버튼 */}
             <button
-              onClick={async () => {
-                if (isExporting) return;
-                setIsExporting(true);
-                try {
-                  await exportToExcel(inspections, qrCodes, reports);
-                  alert(`엑셀 내보내기가 완료되었습니다.\n${inspections.length}개의 분전반 데이터가 내보내졌습니다.`);
-                } catch (error) {
-                  console.error('엑셀 내보내기 오류:', error);
-                  alert('엑셀 내보내기 중 오류가 발생했습니다.\n오류: ' + (error instanceof Error ? error.message : String(error)));
-                } finally {
-                  setIsExporting(false);
-                }
-              }}
+              onClick={() => setShowExportPreview(true)}
               disabled={isExporting}
               className={`hidden md:flex items-center gap-2 ${
                 isExporting 
@@ -617,7 +620,7 @@ const App: React.FC = () => {
         </header>
 
         {/* Main Content */}
-        <main ref={mainScrollRef} className="flex-1 overflow-y-auto overflow-x-hidden p-6 relative">
+        <main ref={mainScrollRef} className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden p-4 md:p-6 relative">
           {isLoading ? (
             <div className="flex items-center justify-center h-full">
               <div className="text-center">
@@ -683,6 +686,28 @@ const App: React.FC = () => {
           <QRScanner
             onScanSuccess={handleQRScanSuccess}
             onClose={() => setShowScanner(false)}
+          />
+        )}
+
+        {/* 엑셀 내보내기 검토 모달 */}
+        {showExportPreview && (
+          <ExportReviewModal
+            inspections={inspections}
+            onConfirm={async () => {
+              setIsExporting(true);
+              try {
+                await exportToExcel(inspections, qrCodes, reports);
+                setShowExportPreview(false);
+                alert(`엑셀 내보내기가 완료되었습니다.\n${inspections.length}개의 분전반 데이터가 내보내졌습니다.`);
+              } catch (error) {
+                console.error('엑셀 내보내기 오류:', error);
+                alert('엑셀 내보내기 중 오류가 발생했습니다.\n오류: ' + (error instanceof Error ? error.message : String(error)));
+              } finally {
+                setIsExporting(false);
+              }
+            }}
+            onCancel={() => setShowExportPreview(false)}
+            isExporting={isExporting}
           />
         )}
       </div>

@@ -92,8 +92,8 @@ const BoardList: React.FC<BoardListProps> = ({ items, selectedId, onSelect }) =>
   };
 
   return (
-    <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden h-full flex flex-col">
-      <div className="p-4 border-b border-slate-100 bg-slate-50">
+    <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden h-full flex flex-col min-w-0">
+      <div className="p-3 md:p-4 border-b border-slate-100 bg-slate-50 shrink-0">
         <div className="flex justify-between items-center">
           <h3 className="font-semibold text-slate-700 flex items-center gap-2">
             <ClipboardList size={18} />
@@ -104,7 +104,7 @@ const BoardList: React.FC<BoardListProps> = ({ items, selectedId, onSelect }) =>
         <p className="text-xs text-slate-500 mt-1.5">데이터는 DB Master에 등록된 분전함의 내용을 기반으로 생성됩니다.</p>
       </div>
       <div className="overflow-y-auto flex-1">
-        <table className="w-full text-sm text-left">
+        <table className="w-full text-xs md:text-sm text-left min-w-[280px]">
           <thead className="text-xs text-slate-500 uppercase bg-slate-50 sticky top-0">
             <tr>
               <th 

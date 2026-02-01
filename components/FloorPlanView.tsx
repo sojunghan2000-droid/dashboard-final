@@ -253,9 +253,11 @@ const FloorPlanView: React.FC<FloorPlanViewProps> = ({
         const newX = e.clientX - dragStart.x;
         const newY = e.clientY - dragStart.y;
         
-        // 화면 경계 내에서만 이동
-        const maxX = window.innerWidth - 400; // 패널 너비 고려
-        const maxY = window.innerHeight - 400; // 패널 높이 고려
+        // 화면 경계 내에서만 이동 (모바일 대응)
+        const panelWidth = Math.min(400, window.innerWidth - 24);
+        const panelHeight = Math.min(400, window.innerHeight - 100);
+        const maxX = window.innerWidth - panelWidth;
+        const maxY = window.innerHeight - panelHeight;
         
         setPanelPosition({
           x: Math.max(0, Math.min(newX, maxX)),
@@ -580,9 +582,9 @@ const FloorPlanView: React.FC<FloorPlanViewProps> = ({
 
   return (
     <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-      <div className="p-4 border-b border-slate-200 bg-slate-50 flex items-center justify-between">
-        <div>
-          <h3 className="text-lg font-semibold text-slate-800">Distribution Board Locations</h3>
+      <div className="p-3 md:p-4 border-b border-slate-200 bg-slate-50 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div className="min-w-0">
+          <h3 className="text-base md:text-lg font-semibold text-slate-800 truncate">Distribution Board Locations</h3>
           <p className="text-sm text-slate-600 mt-1">
             {allMarkers.length} board{allMarkers.length !== 1 ? 's' : ''} mapped on floor plan
             {allMarkers.length === 0 && (
@@ -603,20 +605,18 @@ const FloorPlanView: React.FC<FloorPlanViewProps> = ({
         </div>
       </div>
 
-      <div className="relative bg-slate-100" style={{ minHeight: '600px' }}>
+      <div className="relative bg-slate-100 min-h-[40vh] md:min-h-[600px]">
         {/* Floor Plan Image - 숨김 처리, 위젯만 표시 */}
         <div 
-          className="relative w-full h-full cursor-crosshair" 
-          style={{ minHeight: '600px' }}
+          className="relative w-full h-full min-h-[40vh] md:min-h-[600px] cursor-crosshair touch-none" 
           onClick={handleImageClick}
         >
           {/* Floor Plan Image - 낮은 해상도, 최하위 z-index */}
           <img
             src={floorImagePath}
             alt={`${selectedFloor === 'F1' ? 'F1' : 'B1'} Floor Plan`}
-            className="w-full h-auto object-contain pointer-events-none"
+            className="w-full h-auto object-contain pointer-events-none min-h-[40vh] md:min-h-[600px]"
             style={{ 
-              minHeight: '600px', 
               objectFit: 'contain',
               imageRendering: 'pixelated', // 해상도 낮춤
               opacity: 0.7, // 약간 투명하게
@@ -708,7 +708,7 @@ const FloorPlanView: React.FC<FloorPlanViewProps> = ({
             {/* Popup Panel */}
             <div 
               ref={panelRef}
-              className={`fixed bg-white rounded-xl shadow-2xl border border-slate-200 p-6 max-w-md ${isDragging ? 'cursor-grabbing' : 'cursor-move'}`}
+              className={`fixed bg-white rounded-xl shadow-2xl border border-slate-200 p-4 md:p-6 max-w-[calc(100vw-24px)] md:max-w-md w-[calc(100vw-24px)] md:w-auto max-h-[85vh] overflow-y-auto ${isDragging ? 'cursor-grabbing' : 'cursor-move'}`}
               style={{
                 left: panelPosition.x === 0 ? '50%' : `${panelPosition.x}px`,
                 top: panelPosition.y === 0 ? '50%' : `${panelPosition.y}px`,

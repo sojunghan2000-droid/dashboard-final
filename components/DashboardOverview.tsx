@@ -70,17 +70,17 @@ const DashboardOverview: React.FC<DashboardOverviewProps> = ({
   };
 
   return (
-    <div className="h-full overflow-y-auto">
-      <div className="space-y-6">
+    <div className="h-full overflow-y-auto overflow-x-hidden">
+      <div className="space-y-4 md:space-y-6">
         {/* Header */}
         <div>
-          <h1 className="text-2xl font-bold text-slate-800 mb-2">Dashboard Overview</h1>
-          <p className="text-slate-600">Safety inspection status and statistics</p>
+          <h1 className="text-xl md:text-2xl font-bold text-slate-800 mb-2">Dashboard Overview</h1>
+          <p className="text-sm md:text-base text-slate-600">Safety inspection status and statistics</p>
         </div>
 
         {/* Stats Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
+          <div className="bg-white p-4 md:p-6 rounded-xl shadow-sm border border-slate-200">
             <div className="flex items-center justify-between mb-4">
               <div className="p-3 bg-blue-100 rounded-lg">
                 <Activity size={24} className="text-blue-600" />
@@ -122,12 +122,12 @@ const DashboardOverview: React.FC<DashboardOverviewProps> = ({
         </div>
 
         {/* Charts and Recent Activity */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 md:gap-6">
           {/* Status Chart */}
-          <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
+          <div className="bg-white p-4 md:p-6 rounded-xl shadow-sm border border-slate-200">
             <h3 className="text-lg font-semibold text-slate-800 mb-4">Inspection Status</h3>
             <div className="flex items-center justify-center">
-              <div className="w-48 h-48">
+              <div className="w-40 h-40 md:w-48 md:h-48">
                 <StatsChart data={stats} />
               </div>
             </div>
@@ -145,7 +145,7 @@ const DashboardOverview: React.FC<DashboardOverviewProps> = ({
           </div>
 
           {/* Recent Inspections */}
-          <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
+          <div className="bg-white p-4 md:p-6 rounded-xl shadow-sm border border-slate-200">
             <h3 className="text-lg font-semibold text-slate-800 mb-4">Recent Inspections</h3>
             {recentInspections.length === 0 ? (
               <div className="text-center py-8 text-slate-400">

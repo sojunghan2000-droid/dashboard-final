@@ -661,11 +661,11 @@ const InspectionDetail: React.FC<InspectionDetailProps> = ({ record, onSave, onG
   }
 
   return (
-    <div className="bg-white h-full flex flex-col shadow-xl border-l border-slate-200 overflow-hidden">
+    <div className="bg-white h-full flex flex-col shadow-xl border-l-0 md:border-l border-slate-200 overflow-hidden">
       {/* Header */}
-      <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
-        <div>
-          <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+      <div className="px-4 md:px-6 py-3 md:py-4 border-b border-slate-100 flex justify-between items-center gap-2 bg-slate-50/50 shrink-0">
+        <div className="min-w-0">
+          <h2 className="text-base md:text-xl font-bold text-slate-800 flex flex-wrap items-center gap-2">
             <span className="bg-slate-200 text-slate-600 px-2 py-1 rounded text-sm">PNL NO.</span>
             {formData.panelNo}
           </h2>
@@ -676,13 +676,13 @@ const InspectionDetail: React.FC<InspectionDetailProps> = ({ record, onSave, onG
         </div>
       </div>
 
-      <div className="flex-[1.04] overflow-y-auto p-4 space-y-6">
+      <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-6">
         
         {/* 기본 정보 섹션 */}
         <div className="bg-green-50 border border-green-200 rounded-lg p-4">
           <h3 className="text-lg font-bold text-green-800 mb-4">공사용 가설 분전반</h3>
           
-          <div className="grid grid-cols-2 gap-4 mb-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
             <div>
               <label className="block text-sm font-semibold text-slate-700 mb-2">PNL NO.</label>
               <input 

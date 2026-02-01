@@ -470,9 +470,9 @@ const Dashboard: React.FC<DashboardProps> = ({
                   
                   if (!panelNo || !hasPhoto) continue;
                   
-                  // ExcelJS 행 번호는 0-based이므로, 헤더가 0행, 데이터는 1행부터
-                  // 하지만 Excel 시트에서는 1-based이므로, 헤더가 1행, 데이터는 2행부터
-                  const excelRowNum = dataRowIndex + 1; // ExcelJS의 nativeRow는 0-based
+                  // ExcelJS 행 번호는 0-based: 헤더=0행, 데이터 1행부터
+                  // dataRowIndex 1 = photosData[1] = Excel 2행 = nativeRow 1
+                  const nativeRowForData = dataRowIndex; // 0-based, ExcelJS와 동일
                   
                   // 해당 inspection 찾기
                   const inspectionIndex = updatedInspections.findIndex(ins => ins.panelNo === panelNo);
@@ -482,8 +482,7 @@ const Dashboard: React.FC<DashboardProps> = ({
                   }
                   
                   // 이미지 찾기 (C열 또는 D열에 있을 수 있음, 3열 또는 4열)
-                  // 이미지가 해당 행 범위에 있는지 확인
-                  // ExcelJS의 nativeRow와 nativeCol은 0-based입니다
+                  // ExcelJS nativeRow/nativeCol은 0-based. dataRowIndex와 동일 단위 사용
                   const imageForRow = images.find(img => {
                     const imgTop = img.range.tl.nativeRow; // 0-based
                     const imgBottom = img.range.br.nativeRow; // 0-based
@@ -491,12 +490,11 @@ const Dashboard: React.FC<DashboardProps> = ({
                     const imgRight = img.range.br.nativeCol; // 0-based
                     
                     // 이미지가 C열(2) 또는 D열(3)에 있고, 행 범위에 포함되는지 확인
-                    // 행 매칭: 현재 행이 이미지 범위 내에 있는지 확인 (약간의 여유를 둠)
                     const isInColumn = (imgLeft <= 2 && imgRight >= 2) || (imgLeft <= 3 && imgRight >= 3);
-                    const isInRow = imgTop <= excelRowNum && excelRowNum <= imgBottom;
+                    const isInRow = imgTop <= nativeRowForData && nativeRowForData <= imgBottom;
                     
                     if (isInColumn && isInRow) {
-                      console.log(`이미지 매칭 성공: PNL NO ${panelNo}, 행 ${excelRowNum + 1} (ExcelJS: ${excelRowNum}), 이미지 범위 행 ${imgTop + 1}-${imgBottom + 1}, 열 ${imgLeft + 1}-${imgRight + 1}`);
+                      console.log(`이미지 매칭 성공: PNL NO ${panelNo}, 행 ${nativeRowForData + 1} (nativeRow: ${nativeRowForData}), 이미지 범위 행 ${imgTop + 1}-${imgBottom + 1}, 열 ${imgLeft + 1}-${imgRight + 1}`);
                       // 이미지 객체 확인
                       console.log(`이미지 객체:`, { 
                         hasImage: !!img.image, 
@@ -1007,11 +1005,11 @@ const Dashboard: React.FC<DashboardProps> = ({
   };
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 h-full">
+    <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 md:gap-6 h-full min-h-0">
       {/* Left Panel: Stats & List */}
       <div className={`
         ${selectedId ? 'hidden lg:flex' : 'flex'} 
-        lg:col-span-4 flex-col gap-6 h-full
+        lg:col-span-4 flex-col gap-4 md:gap-6 h-full min-h-0
       `}>
         {/* Action Buttons - 엑셀 버튼은 App.tsx header로 이동됨 */}
         {/* 엑셀 입력 버튼 (App.tsx에서 트리거 가능하도록 data 속성 추가) */}
@@ -1042,13 +1040,13 @@ const Dashboard: React.FC<DashboardProps> = ({
         )}
 
         {/* Stats Card */}
-        <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200">
-          <h3 className="text-sm font-bold text-slate-500 uppercase tracking-wider mb-4">Inspection Status</h3>
-          <div className="flex items-center justify-between">
-            <div className="w-1/2">
+        <div className="bg-white p-4 md:p-5 rounded-xl shadow-sm border border-slate-200 shrink-0">
+          <h3 className="text-sm font-bold text-slate-500 uppercase tracking-wider mb-3 md:mb-4">Inspection Status</h3>
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <div className="w-full sm:w-1/2 min-h-[180px] md:min-h-[200px]">
               <StatsChart data={stats} />
             </div>
-            <div className="w-1/2 space-y-2">
+            <div className="w-full sm:w-1/2 space-y-2">
               {stats.map(s => (
                 <div key={s.name} className="flex justify-between items-center text-sm">
                   <div className="flex items-center gap-2">
@@ -1079,7 +1077,7 @@ const Dashboard: React.FC<DashboardProps> = ({
       {/* Right Panel: Detail View */}
       <div className={`
         ${selectedId ? 'flex' : 'hidden lg:flex'} 
-        lg:col-span-8 h-full flex-col
+        lg:col-span-8 h-full min-h-0 flex-col overflow-hidden
       `}>
         {(() => {
           // 안전하게 record 가져오기
