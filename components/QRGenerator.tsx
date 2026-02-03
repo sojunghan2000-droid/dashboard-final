@@ -5,18 +5,22 @@ import { QrCode, Download, Printer, MapPin, Building2, FileText, Calendar, Trash
 import { QRCodeData, InspectionRecord } from '../types';
 import FloorPlanView from './FloorPlanView';
 
-/** TR(위치) 허용 값: A, B, C, D */
-const TR_OPTIONS = ['A', 'B', 'C', 'D'] as const;
+/** TR(위치) 허용 값: A (TR-1 900KVA), B (TR-2 950KVA) */
+const TR_OPTIONS = ['A', 'B'] as const;
+const TR_DISPLAY_LABELS: Record<string, string> = {
+  'A': 'TR-1 900KVA',
+  'B': 'TR-2 950KVA',
+};
 const isValidTR = (v: string): v is typeof TR_OPTIONS[number] =>
   TR_OPTIONS.includes(v as typeof TR_OPTIONS[number]);
 
-/** PNL NO. 형식: MOCK_DATA와 동일. 층 1=F1, 2=F2, …, 6=F6, 7=B1, 8=B2 / TR A,B,C,D → 1,2,3,4 */
+/** PNL NO. 형식: MOCK_DATA와 동일. 층 1=F1, 2=F2, …, 6=F6, 7=B1, 8=B2 / TR A,B → 1,2 */
 const FLOOR_TO_NUM: Record<string, string> = { F1: '1', B1: '7' };
 const NUM_TO_FLOOR: Record<string, string> = {
   '1': 'F1', '2': 'F2', '3': 'F3', '4': 'F4', '5': 'F5', '6': 'F6', '7': 'B1', '8': 'B2',
 };
-const TR_TO_NUM: Record<string, string> = { A: '1', B: '2', C: '3', D: '4' };
-const NUM_TO_TR: Record<string, string> = { '1': 'A', '2': 'B', '3': 'C', '4': 'D' };
+const TR_TO_NUM: Record<string, string> = { A: '1', B: '2' };
+const NUM_TO_TR: Record<string, string> = { '1': 'A', '2': 'B' };
 
 /** 층(F1/B1) + TR(A/B/C/D) → PNL NO.(1-1, 2-1 등) */
 function toPnlNo(floor: string, location: string): string {
@@ -1369,14 +1373,14 @@ const QRGenerator: React.FC<QRGeneratorProps> = ({
       {/* Left Panel: QR List */}
       <div className="w-1/3 border-r border-slate-200 bg-white overflow-y-auto">
         <div className="p-4 border-b border-slate-200 bg-slate-50">
-          <h2 className="text-lg font-semibold text-slate-800 mb-1">등록된 분전함</h2>
+          <h2 className="text-lg font-semibold text-slate-800 mb-1">등록 분전함</h2>
           <p className="text-sm text-slate-600">{inspections.length}개</p>
         </div>
-        
+
         {inspections.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-slate-400 p-8">
             <QrCode size={48} className="mb-4 opacity-50" />
-            <p className="text-sm text-center">등록된 분전함이 없습니다</p>
+            <p className="text-sm text-center">등록 분전함이 없습니다</p>
           </div>
         ) : (
           <div className="divide-y divide-slate-100">
@@ -1637,9 +1641,68 @@ const QRGenerator: React.FC<QRGeneratorProps> = ({
                         className="w-full rounded-lg border-slate-300 border px-4 py-2.5 text-slate-700 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none bg-white cursor-pointer"
                       >
                         {TR_OPTIONS.map((opt) => (
-                          <option key={opt} value={opt}>{opt}</option>
+                          <option key={opt} value={opt}>{TR_DISPLAY_LABELS[opt]}</option>
                         ))}
                       </select>
+                    </div>
+
+                    {/* 시공사 (고정값) */}
+                    <div>
+                      <label className="block text-sm font-semibold text-slate-700 mb-2">
+                        시공사
+                      </label>
+                      <input
+                        type="text"
+                        value="삼성물산"
+                        disabled
+                        className="w-full rounded-lg border-slate-300 border px-4 py-2.5 text-slate-500 bg-slate-100 cursor-not-allowed"
+                      />
+                    </div>
+
+                    {/* PJT명 (고정값) */}
+                    <div>
+                      <label className="block text-sm font-semibold text-slate-700 mb-2">
+                        PJT명
+                      </label>
+                      <input
+                        type="text"
+                        value="성수동 K-PJT"
+                        disabled
+                        className="w-full rounded-lg border-slate-300 border px-4 py-2.5 text-slate-500 bg-slate-100 cursor-not-allowed"
+                      />
+                    </div>
+
+                    {/* 관리번호 (판넬명) - Key-in */}
+                    <div>
+                      <label className="block text-sm font-semibold text-slate-700 mb-2">
+                        관리번호 (판넬명)
+                      </label>
+                      <input
+                        type="text"
+                        value={qrData.position}
+                        onChange={(e) => handleInputChange('position', e.target.value)}
+                        placeholder="판넬명 입력"
+                        className="w-full rounded-lg border-slate-300 border px-4 py-2.5 text-slate-700 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all"
+                      />
+                    </div>
+
+                    {/* 공칭 단면적 - Key-in with SQ unit */}
+                    <div>
+                      <label className="block text-sm font-semibold text-slate-700 mb-2">
+                        공칭 단면적
+                      </label>
+                      <div className="flex">
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.1"
+                          placeholder="단면적 입력"
+                          className="flex-1 rounded-l-lg border-slate-300 border px-4 py-2.5 text-slate-700 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all"
+                        />
+                        <span className="bg-slate-200 border border-l-0 border-slate-300 px-4 py-2.5 rounded-r-lg text-slate-600 font-medium">
+                          SQ
+                        </span>
+                      </div>
                     </div>
 
                     <div className="grid grid-cols-2 gap-4">
@@ -1764,9 +1827,70 @@ const QRGenerator: React.FC<QRGeneratorProps> = ({
                   className="w-full rounded-lg border-slate-300 border px-4 py-2.5 text-slate-700 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none bg-white cursor-pointer"
                 >
                   {TR_OPTIONS.map((opt) => (
-                    <option key={opt} value={opt}>{opt}</option>
+                    <option key={opt} value={opt}>{TR_DISPLAY_LABELS[opt]}</option>
                   ))}
                 </select>
+              </div>
+
+              {/* 시공사 (고정값) */}
+              <div className="p-4 bg-slate-50 rounded-lg border border-slate-200">
+                <label className="block text-sm font-semibold text-slate-700 mb-2">
+                  시공사
+                </label>
+                <input
+                  type="text"
+                  value="삼성물산"
+                  disabled
+                  className="w-full rounded-lg border-slate-300 border px-4 py-2.5 text-slate-500 bg-slate-100 cursor-not-allowed"
+                />
+              </div>
+
+              {/* PJT명 (고정값) */}
+              <div className="p-4 bg-slate-50 rounded-lg border border-slate-200">
+                <label className="block text-sm font-semibold text-slate-700 mb-2">
+                  PJT명
+                </label>
+                <input
+                  type="text"
+                  value="성수동 K-PJT"
+                  disabled
+                  className="w-full rounded-lg border-slate-300 border px-4 py-2.5 text-slate-500 bg-slate-100 cursor-not-allowed"
+                />
+              </div>
+
+              {/* 관리번호 (판넬명) - Key-in */}
+              <div className="p-4 bg-slate-50 rounded-lg border border-slate-200">
+                <label className="block text-sm font-semibold text-slate-700 mb-2">
+                  관리번호 (판넬명)
+                </label>
+                <input
+                  type="text"
+                  value={qrData.position}
+                  onChange={(e) => handleInputChange('position', e.target.value)}
+                  onFocus={restoreMainScrollOnFocus}
+                  placeholder="판넬명 입력"
+                  className="w-full rounded-lg border-slate-300 border px-4 py-2.5 text-slate-700 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
+                />
+              </div>
+
+              {/* 공칭 단면적 - Key-in with SQ unit */}
+              <div className="p-4 bg-slate-50 rounded-lg border border-slate-200">
+                <label className="block text-sm font-semibold text-slate-700 mb-2">
+                  공칭 단면적
+                </label>
+                <div className="flex">
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.1"
+                    placeholder="단면적 입력"
+                    onFocus={restoreMainScrollOnFocus}
+                    className="flex-1 rounded-l-lg border-slate-300 border px-4 py-2.5 text-slate-700 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
+                  />
+                  <span className="bg-slate-200 border border-l-0 border-slate-300 px-4 py-2.5 rounded-r-lg text-slate-600 font-medium">
+                    SQ
+                  </span>
+                </div>
               </div>
 
               <div className="p-4 bg-slate-50 rounded-lg border border-slate-200">

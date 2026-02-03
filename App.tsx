@@ -9,7 +9,7 @@ import QRGenerator from './components/QRGenerator';
 import QRScanner from './components/QRScanner';
 import ErrorBoundary from './components/ErrorBoundary';
 import { LayoutDashboard, ScanLine, Bell, Menu, ShieldCheck, ClipboardList, BarChart3, QrCode, X, FileSpreadsheet, FileUp } from 'lucide-react';
-import { initIndexedDB, getAllInspectionsWithPhotos, saveInspection, savePhoto, dataURLToBlob } from './services/indexedDBService';
+import { initIndexedDB, getAllInspectionsWithPhotos, saveInspection, savePhoto, dataURLToBlob, getAllQRCodes, saveAllQRCodes } from './services/indexedDBService';
 import { exportToExcel } from './services/excelService';
 import ExportReviewModal from './components/ExportReviewModal';
 import * as XLSX from 'xlsx';
@@ -120,7 +120,19 @@ const migrateFloorFormat = (data: any): any => {
 const App: React.FC = () => {
   const [inspections, setInspections] = useState<InspectionRecord[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [qrCodes, setQrCodes] = useState<QRCodeData[]>([]);
+  const [qrCodes, setQrCodesState] = useState<QRCodeData[]>([]);
+
+  // QR Codes 변경 시 IndexedDB에도 저장
+  const setQrCodes = useCallback(async (newQrCodes: QRCodeData[] | ((prev: QRCodeData[]) => QRCodeData[])) => {
+    setQrCodesState(prev => {
+      const updatedQrCodes = typeof newQrCodes === 'function' ? newQrCodes(prev) : newQrCodes;
+      // 비동기로 IndexedDB에 저장
+      saveAllQRCodes(updatedQrCodes).catch(error => {
+        console.error('QR Codes IndexedDB 저장 오류:', error);
+      });
+      return updatedQrCodes;
+    });
+  }, []);
   const [currentPage, setCurrentPage] = useState<Page>('dashboard-overview');
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [showScanner, setShowScanner] = useState(false);
@@ -139,13 +151,20 @@ const App: React.FC = () => {
       try {
         setIsLoading(true);
         await initIndexedDB();
+
+        // Inspections 로드
         const loadedInspections = await getAllInspectionsWithPhotos();
-        
         if (loadedInspections.length > 0) {
           setInspections(loadedInspections.map(item => ensurePosition(item)));
         } else {
           // IndexedDB에 데이터가 없으면 MOCK_DATA 사용
           setInspections(MOCK_DATA.map(item => ensurePosition(item)));
+        }
+
+        // QR Codes 로드 (초기 로드이므로 IndexedDB 저장 없이 직접 state 설정)
+        const loadedQRCodes = await getAllQRCodes();
+        if (loadedQRCodes.length > 0) {
+          setQrCodesState(loadedQRCodes);
         }
       } catch (error) {
         console.error('IndexedDB 로드 오류:', error);
@@ -401,7 +420,7 @@ const App: React.FC = () => {
             }`}
           >
             <QrCode size={20} className={currentPage === 'qr-generator' ? '' : 'opacity-70'}/>
-            DB Master
+            Panel Master
           </div>
         </nav>
 

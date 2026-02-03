@@ -1,5 +1,5 @@
 import { openDB, DBSchema, IDBPDatabase } from 'idb';
-import { InspectionRecord } from '../types';
+import { InspectionRecord, QRCodeData } from '../types';
 
 interface InspectionsDB extends DBSchema {
   inspections: {
@@ -17,20 +17,35 @@ interface InspectionsDB extends DBSchema {
     };
     indexes: { 'by-panelNo': string };
   };
+  qrCodes: {
+    key: string; // id
+    value: QRCodeData;
+    indexes: { 'by-id': string };
+  };
+  floorPlanImages: {
+    key: string; // floor (예: 'F1', 'B1', 'F1-panel-master', 'B1-panel-master')
+    value: {
+      floor: string;
+      imageBlob: Blob;
+      updatedAt: number;
+    };
+    indexes: { 'by-floor': string };
+  };
 }
 
 let dbInstance: IDBPDatabase<InspectionsDB> | null = null;
 
 /**
  * IndexedDB 초기화
+ * 버전 2: qrCodes, floorPlanImages 저장소 추가
  */
 export const initIndexedDB = async (): Promise<IDBPDatabase<InspectionsDB>> => {
   if (dbInstance) {
     return dbInstance;
   }
 
-  dbInstance = await openDB<InspectionsDB>('panel-inspector-db', 1, {
-    upgrade(db) {
+  dbInstance = await openDB<InspectionsDB>('panel-inspector-db', 2, {
+    upgrade(db, oldVersion, newVersion) {
       // Inspections 저장소
       if (!db.objectStoreNames.contains('inspections')) {
         const inspectionStore = db.createObjectStore('inspections', {
@@ -45,6 +60,23 @@ export const initIndexedDB = async (): Promise<IDBPDatabase<InspectionsDB>> => {
           keyPath: 'panelNo',
         });
         photoStore.createIndex('by-panelNo', 'panelNo', { unique: true });
+      }
+
+      // QR Codes 저장소 (버전 2에서 추가)
+      if (!db.objectStoreNames.contains('qrCodes')) {
+        const qrCodeStore = db.createObjectStore('qrCodes', {
+          keyPath: 'id',
+        });
+        qrCodeStore.createIndex('by-id', 'id', { unique: true });
+      }
+
+      // Floor Plan Images 저장소 (버전 2에서 추가)
+      // 키: 'F1', 'B1' (Dashboard용), 'F1-panel-master', 'B1-panel-master' (Panel Master용)
+      if (!db.objectStoreNames.contains('floorPlanImages')) {
+        const floorPlanStore = db.createObjectStore('floorPlanImages', {
+          keyPath: 'floor',
+        });
+        floorPlanStore.createIndex('by-floor', 'floor', { unique: true });
       }
     },
   });
@@ -198,23 +230,23 @@ export const dataURLToBlob = (dataURL: string): Blob => {
 export const getAllInspectionsWithPhotos = async (): Promise<InspectionRecord[]> => {
   const inspections = await getAllInspections();
   const db = await initIndexedDB();
-  
+
   // 각 Inspection에 사진 URL 추가
   const inspectionsWithPhotos = await Promise.all(
     inspections.map(async (inspection) => {
       const photoData = await db.get('photos', inspection.panelNo);
-      
+
       let photoUrl: string | null = null;
       let thermalImageUrl: string | null = null;
-      
+
       if (photoData?.photoBlob) {
         photoUrl = await blobToDataURL(photoData.photoBlob);
       }
-      
+
       if (photoData?.thermalImageBlob) {
         thermalImageUrl = await blobToDataURL(photoData.thermalImageBlob);
       }
-      
+
       return {
         ...inspection,
         photoUrl: photoUrl || inspection.photoUrl, // IndexedDB에 없으면 기존 값 사용
@@ -225,6 +257,125 @@ export const getAllInspectionsWithPhotos = async (): Promise<InspectionRecord[]>
       };
     })
   );
-  
+
   return inspectionsWithPhotos;
+};
+
+// ============================================
+// QR Codes 관련 함수들
+// ============================================
+
+/**
+ * QR 코드 저장
+ */
+export const saveQRCode = async (qrCode: QRCodeData): Promise<void> => {
+  const db = await initIndexedDB();
+  await db.put('qrCodes', qrCode);
+};
+
+/**
+ * 여러 QR 코드 한번에 저장
+ */
+export const saveAllQRCodes = async (qrCodes: QRCodeData[]): Promise<void> => {
+  const db = await initIndexedDB();
+  const tx = db.transaction('qrCodes', 'readwrite');
+  await Promise.all([
+    ...qrCodes.map(qr => tx.store.put(qr)),
+    tx.done
+  ]);
+};
+
+/**
+ * 모든 QR 코드 조회
+ */
+export const getAllQRCodes = async (): Promise<QRCodeData[]> => {
+  const db = await initIndexedDB();
+  return await db.getAll('qrCodes');
+};
+
+/**
+ * 특정 QR 코드 조회
+ */
+export const getQRCode = async (id: string): Promise<QRCodeData | undefined> => {
+  const db = await initIndexedDB();
+  return await db.get('qrCodes', id);
+};
+
+/**
+ * QR 코드 삭제
+ */
+export const deleteQRCode = async (id: string): Promise<void> => {
+  const db = await initIndexedDB();
+  await db.delete('qrCodes', id);
+};
+
+/**
+ * 모든 QR 코드 삭제
+ */
+export const clearAllQRCodes = async (): Promise<void> => {
+  const db = await initIndexedDB();
+  await db.clear('qrCodes');
+};
+
+// ============================================
+// Floor Plan Images 관련 함수들
+// ============================================
+
+/**
+ * 층별 배경 이미지 저장
+ * @param floor - 층 식별자 (예: 'F1', 'B1', 'F1-panel-master', 'B1-panel-master')
+ * @param imageBlob - 이미지 Blob
+ */
+export const saveFloorPlanImage = async (floor: string, imageBlob: Blob): Promise<void> => {
+  const db = await initIndexedDB();
+  await db.put('floorPlanImages', {
+    floor,
+    imageBlob,
+    updatedAt: Date.now(),
+  });
+};
+
+/**
+ * 층별 배경 이미지 조회 (Blob 반환)
+ */
+export const getFloorPlanImage = async (floor: string): Promise<Blob | null> => {
+  const db = await initIndexedDB();
+  const data = await db.get('floorPlanImages', floor);
+  return data?.imageBlob || null;
+};
+
+/**
+ * 층별 배경 이미지 조회 (Data URL 반환)
+ */
+export const getFloorPlanImageAsDataURL = async (floor: string): Promise<string | null> => {
+  const blob = await getFloorPlanImage(floor);
+  if (blob) {
+    return await blobToDataURL(blob);
+  }
+  return null;
+};
+
+/**
+ * 층별 배경 이미지 삭제
+ */
+export const deleteFloorPlanImage = async (floor: string): Promise<void> => {
+  const db = await initIndexedDB();
+  await db.delete('floorPlanImages', floor);
+};
+
+/**
+ * 모든 층별 배경 이미지 조회
+ */
+export const getAllFloorPlanImages = async (): Promise<{ floor: string; imageUrl: string }[]> => {
+  const db = await initIndexedDB();
+  const allImages = await db.getAll('floorPlanImages');
+
+  const imagesWithUrls = await Promise.all(
+    allImages.map(async (img) => ({
+      floor: img.floor,
+      imageUrl: await blobToDataURL(img.imageBlob),
+    }))
+  );
+
+  return imagesWithUrls;
 };

@@ -1,6 +1,7 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { InspectionRecord, QRCodeData } from '../types';
-import { CheckCircle2, Clock, AlertCircle, X, QrCode, Edit2, Save, MapPin } from 'lucide-react';
+import { CheckCircle2, Clock, AlertCircle, X, QrCode, Edit2, Save, MapPin, Upload, Image as ImageIcon } from 'lucide-react';
+import { getFloorPlanImageAsDataURL, saveFloorPlanImage, dataURLToBlob } from '../services/indexedDBService';
 
 interface FloorPlanViewProps {
   inspections: InspectionRecord[];
@@ -94,8 +95,65 @@ const FloorPlanView: React.FC<FloorPlanViewProps> = ({
   /** 리스트/마커에서 다른 검사 항목을 선택했을 때만 층 동기화. 드롭다운으로 층만 바꾼 경우에는 덮어쓰지 않음 */
   const prevSelectedInspectionIdRef = useRef<string | null>(null);
 
+  // 배경 이미지 관련 state
+  const [floorPlanImageF1, setFloorPlanImageF1] = useState<string | null>(null);
+  const [floorPlanImageB1, setFloorPlanImageB1] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   // prop으로 전달된 층수가 있으면 사용, 없으면 내부 상태 사용
   const selectedFloor = propSelectedFloor ?? internalSelectedFloor;
+
+  // IndexedDB에서 배경 이미지 로드
+  useEffect(() => {
+    const loadFloorPlanImages = async () => {
+      try {
+        const f1Image = await getFloorPlanImageAsDataURL('F1');
+        const b1Image = await getFloorPlanImageAsDataURL('B1');
+        if (f1Image) setFloorPlanImageF1(f1Image);
+        if (b1Image) setFloorPlanImageB1(b1Image);
+      } catch (error) {
+        console.error('배경 이미지 로드 오류:', error);
+      }
+    };
+    loadFloorPlanImages();
+  }, []);
+
+  // 배경 이미지 업로드 핸들러
+  const handleFloorPlanImageUpload = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    try {
+      // 파일을 Data URL로 읽기
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        const dataUrl = e.target?.result as string;
+        if (!dataUrl) return;
+
+        // Data URL을 Blob으로 변환하여 IndexedDB에 저장
+        const blob = dataURLToBlob(dataUrl);
+        await saveFloorPlanImage(selectedFloor, blob);
+
+        // state 업데이트
+        if (selectedFloor === 'F1') {
+          setFloorPlanImageF1(dataUrl);
+        } else {
+          setFloorPlanImageB1(dataUrl);
+        }
+
+        alert(`${selectedFloor} 층 배경 이미지가 저장되었습니다.`);
+      };
+      reader.readAsDataURL(file);
+    } catch (error) {
+      console.error('배경 이미지 업로드 오류:', error);
+      alert('배경 이미지 업로드 중 오류가 발생했습니다.');
+    }
+
+    // 파일 입력 초기화
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  }, [selectedFloor]);
 
   const handleFloorChange = (floor: 'F1' | 'B1') => {
     if (onFloorChange) {
@@ -577,8 +635,14 @@ const FloorPlanView: React.FC<FloorPlanViewProps> = ({
     return markers;
   }, [positionedInspections, qrLocations, selectedFloor]);
 
-  // 층에 따른 이미지 경로 결정
-  const floorImagePath = selectedFloor === 'F1' ? '/1st Floor.jpg' : '/Basement.jpg';
+  // 층에 따른 이미지 경로 결정 (IndexedDB에 저장된 이미지가 있으면 우선 사용)
+  const floorImagePath = useMemo(() => {
+    if (selectedFloor === 'F1') {
+      return floorPlanImageF1 || '/1st Floor.jpg';
+    } else {
+      return floorPlanImageB1 || '/Basement.jpg';
+    }
+  }, [selectedFloor, floorPlanImageF1, floorPlanImageB1]);
 
   return (
     <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
@@ -602,6 +666,18 @@ const FloorPlanView: React.FC<FloorPlanViewProps> = ({
             <option value="F1">F1</option>
             <option value="B1">B1</option>
           </select>
+          {/* 배경 이미지 업로드 버튼 */}
+          <label className="flex items-center gap-2 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg cursor-pointer text-sm font-medium transition-colors">
+            <Upload size={16} />
+            <span className="hidden sm:inline">{selectedFloor} 배경</span>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              onChange={handleFloorPlanImageUpload}
+              className="hidden"
+            />
+          </label>
         </div>
       </div>
 

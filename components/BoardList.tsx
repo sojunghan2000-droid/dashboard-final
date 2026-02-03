@@ -101,7 +101,7 @@ const BoardList: React.FC<BoardListProps> = ({ items, selectedId, onSelect }) =>
           </h3>
           <span className="text-xs bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full">{items.length} Items</span>
         </div>
-        <p className="text-xs text-slate-500 mt-1.5">데이터는 DB Master에 등록된 분전함의 내용을 기반으로 생성됩니다.</p>
+        <p className="text-xs text-slate-500 mt-1.5">데이터는 Panel Master에 등록된 분전함의 내용을 기반으로 생성됩니다.</p>
       </div>
       <div className="overflow-y-auto flex-1">
         <table className="w-full text-xs md:text-sm text-left min-w-[280px]">
