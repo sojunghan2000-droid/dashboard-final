@@ -173,14 +173,12 @@ const App: React.FC = () => {
         setIsLoading(true);
         await initIndexedDB();
 
-        // Inspections 로드
+        // Inspections 로드: IndexedDB + MOCK_DATA 머지 (새 패널 자동 추가)
         const loadedInspections = await getAllInspectionsWithPhotos();
-        if (loadedInspections.length > 0) {
-          setInspections(loadedInspections.map(item => ensurePosition(item)));
-        } else {
-          // IndexedDB에 데이터가 없으면 MOCK_DATA 사용
-          setInspections(MOCK_DATA.map(item => ensurePosition(item)));
-        }
+        const existingPanelNos = new Set(loadedInspections.map(i => i.panelNo));
+        const newFromMock = MOCK_DATA.filter(m => !existingPanelNos.has(m.panelNo));
+        const merged = [...loadedInspections, ...newFromMock];
+        setInspections(merged.map(item => ensurePosition(item)));
 
         // QR Codes 로드 (초기 로드이므로 IndexedDB 저장 없이 직접 state 설정)
         const loadedQRCodes = await getAllQRCodes();
