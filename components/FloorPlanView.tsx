@@ -365,6 +365,35 @@ const FloorPlanView: React.FC<FloorPlanViewProps> = ({
   };
 
 
+  /** TR 기준 색상 반환: TR-1 (A) = 파란색, TR-2 (B) = 주황색 */
+  const getTRColor = (panelNo: string, qrCodes: QRCodeData[]): string => {
+    // PNL NO.에서 TR 추출 (형식: 1-1, 1-2, 7-1, 7-2 → 두 번째 숫자가 1=A=TR-1, 2=B=TR-2)
+    const parts = panelNo.trim().split('-');
+    if (parts.length >= 2) {
+      const trNum = parts[1]?.trim();
+      if (trNum === '1') return '#3b82f6'; // TR-1 (A) - 파란색
+      if (trNum === '2') return '#f97316'; // TR-2 (B) - 주황색
+    }
+
+    // QR 코드에서 location 확인
+    const matchingQR = qrCodes.find(qr => {
+      try {
+        const qrData = JSON.parse(qr.qrData);
+        return qrData.id === panelNo;
+      } catch {
+        return false;
+      }
+    });
+
+    if (matchingQR) {
+      const location = matchingQR.location?.toUpperCase();
+      if (location === 'A' || location === '1') return '#3b82f6'; // TR-1 (A) - 파란색
+      if (location === 'B' || location === '2') return '#f97316'; // TR-2 (B) - 주황색
+    }
+
+    return '#94a3b8'; // 기본 회색
+  };
+
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'Complete':
@@ -716,7 +745,8 @@ const FloorPlanView: React.FC<FloorPlanViewProps> = ({
           {allMarkers.map((marker) => {
             const { x, y } = marker.position;
             const inspection = marker.data;
-            const statusColor = getStatusColor(inspection.status);
+            // TR 기준 색상 사용 (TR-1 = 파란색, TR-2 = 주황색)
+            const trColor = getTRColor(inspection.panelNo, propQrCodes);
             const isSelected = selectedInspection?.panelNo === marker.id;
             const isHovered = hoveredInspection?.panelNo === marker.id;
 
@@ -743,7 +773,7 @@ const FloorPlanView: React.FC<FloorPlanViewProps> = ({
                   style={{
                     bottom: '100%',
                     marginBottom: '4px',
-                    backgroundColor: statusColor,
+                    backgroundColor: trColor,
                   }}
                 >
                   {inspection.panelNo}
@@ -754,7 +784,7 @@ const FloorPlanView: React.FC<FloorPlanViewProps> = ({
                   style={{
                     width: isSelected || isHovered ? '14px' : '10px',
                     height: isSelected || isHovered ? '14px' : '10px',
-                    backgroundColor: statusColor,
+                    backgroundColor: trColor,
                     border: '2px solid white',
                     boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
                   }}
@@ -966,21 +996,21 @@ const FloorPlanView: React.FC<FloorPlanViewProps> = ({
          })()}
 
 
-        {/* Legend */}
+        {/* Legend - TR 기준 */}
         <div className="absolute top-4 right-4 bg-white rounded-lg shadow-lg border border-slate-200 p-3 z-20">
-          <p className="text-xs font-semibold text-slate-700 mb-2 uppercase tracking-wide">Legend</p>
+          <p className="text-xs font-semibold text-slate-700 mb-2 uppercase tracking-wide">Legend (TR)</p>
           <div className="space-y-1.5">
             <div className="flex items-center gap-2">
-              <div className="w-4 h-4 rounded-full" style={{ backgroundColor: '#10b981' }}></div>
-              <span className="text-xs text-slate-600">Complete</span>
+              <div className="w-4 h-4 rounded-full" style={{ backgroundColor: '#3b82f6' }}></div>
+              <span className="text-xs text-slate-600">TR-1 900KVA</span>
             </div>
             <div className="flex items-center gap-2">
-              <div className="w-4 h-4 rounded-full" style={{ backgroundColor: '#3b82f6' }}></div>
-              <span className="text-xs text-slate-600">In Progress</span>
+              <div className="w-4 h-4 rounded-full" style={{ backgroundColor: '#f97316' }}></div>
+              <span className="text-xs text-slate-600">TR-2 950KVA</span>
             </div>
             <div className="flex items-center gap-2">
               <div className="w-4 h-4 rounded-full" style={{ backgroundColor: '#94a3b8' }}></div>
-              <span className="text-xs text-slate-600">Pending</span>
+              <span className="text-xs text-slate-600">미지정</span>
             </div>
           </div>
         </div>

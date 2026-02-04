@@ -114,9 +114,11 @@ const QRGenerator: React.FC<QRGeneratorProps> = ({
   const [isSelectFocused, setIsSelectFocused] = useState(false);
   const [showQRModal, setShowQRModal] = useState(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showInlineCreateForm, setShowInlineCreateForm] = useState(false);
   /** true일 때만 FloorPlanView 상세 패널(모달) 표시 - "Dashboard에 위치 매핑" 클릭 시 true */
   const [openDetailPanelForMapping, setOpenDetailPanelForMapping] = useState(false);
   const rightPanelScrollRef = useRef<HTMLDivElement>(null);
+  const panelDetailSectionRef = useRef<HTMLDivElement>(null);
   const savedMainScrollOnInteractionRef = useRef<number>(0);
   const savedRightScrollOnInteractionRef = useRef<number>(0);
 
@@ -134,6 +136,31 @@ const QRGenerator: React.FC<QRGeneratorProps> = ({
     });
     setTimeout(restore, 80);
   }, [mainScrollRef]);
+
+  /** 패널 상세 정보 섹션으로 스크롤 */
+  const scrollToPanelDetail = useCallback(() => {
+    setTimeout(() => {
+      if (panelDetailSectionRef.current && rightPanelScrollRef.current) {
+        panelDetailSectionRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    }, 100);
+  }, []);
+
+  /** FloorPlanView 위젯(마커)으로 스크롤 */
+  const scrollToFloorPlanWidget = useCallback((panelNo: string) => {
+    setTimeout(() => {
+      // FloorPlanView 내의 해당 마커로 스크롤
+      const markerElement = document.querySelector(`[data-marker-id="${panelNo}"]`) as HTMLElement;
+      if (markerElement) {
+        markerElement.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+        // 마커 강조 효과
+        markerElement.style.transform = 'scale(1.5)';
+        setTimeout(() => {
+          markerElement.style.transform = '';
+        }, 1000);
+      }
+    }, 100);
+  }, []);
 
   /** 버튼 클릭 후 리렌더/alert 등으로 스크롤이 바뀐 뒤 여러 번 복원 (onMouseDown에서 저장된 값 사용) */
   const restoreScrollAfterAction = useCallback(() => {
@@ -1399,8 +1426,6 @@ const QRGenerator: React.FC<QRGeneratorProps> = ({
                   data-selected={isSelected ? 'true' : 'false'}
                   onClick={(e) => {
                     (e.currentTarget as HTMLElement).blur();
-                    const rightScroll = rightPanelScrollRef.current?.scrollTop ?? 0;
-                    const mainScroll = mainScrollRef?.current?.scrollTop ?? 0;
                     if (matchingQR) {
                       handleSelectQR(matchingQR);
                     } else {
@@ -1417,16 +1442,8 @@ const QRGenerator: React.FC<QRGeneratorProps> = ({
                     if (onSelectInspection) {
                       onSelectInspection(inspection.panelNo);
                     }
-                    requestAnimationFrame(() => {
-                      requestAnimationFrame(() => {
-                        if (rightPanelScrollRef.current) {
-                          rightPanelScrollRef.current.scrollTop = rightScroll;
-                        }
-                        if (mainScrollRef?.current) {
-                          mainScrollRef.current.scrollTop = mainScroll;
-                        }
-                      });
-                    });
+                    // 패널 클릭 시 FloorPlanView 위젯으로 스크롤
+                    scrollToFloorPlanWidget(inspection.panelNo);
                   }}
                   className={`p-4 cursor-pointer transition-colors hover:bg-slate-50 ${
                     isSelected ? 'bg-blue-50 border-l-4 border-l-blue-500' : ''
@@ -1457,6 +1474,8 @@ const QRGenerator: React.FC<QRGeneratorProps> = ({
                           onClick={(e) => {
                             e.stopPropagation();
                             handleEditQR(matchingQR, e);
+                            // 수정 버튼 클릭 시 패널 상세 정보로 스크롤
+                            scrollToPanelDetail();
                           }}
                           className="p-1.5 hover:bg-blue-50 rounded text-slate-400 hover:text-blue-600 transition-colors"
                           title="Edit QR code"
@@ -1505,23 +1524,217 @@ const QRGenerator: React.FC<QRGeneratorProps> = ({
                   <QrCode size={24} className="text-blue-600" />
                 </div>
                 <div>
-                  <h1 className="text-2xl font-bold text-slate-800">QR Code Generator</h1>
-                  <p className="text-sm text-slate-600 mt-1">Distribution Board QR Code 생성</p>
+                  <h1 className="text-2xl font-bold text-slate-800">패널 상세 정보</h1>
+                  <p className="text-sm text-slate-600 mt-1">Distribution Board 상세 정보 관리</p>
                 </div>
               </div>
               <button
                 onClick={() => {
-                  setShowCreateModal(true);
-                  setShowForm(true);
-                  resetForm();
+                  setShowInlineCreateForm(!showInlineCreateForm);
+                  if (!showInlineCreateForm) {
+                    resetForm();
+                    setSelectedQR(null);
+                  }
                 }}
-                className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2.5 rounded-lg font-medium transition-colors flex items-center justify-center gap-2 shadow-md hover:shadow-lg"
+                className={`${showInlineCreateForm ? 'bg-slate-600 hover:bg-slate-700' : 'bg-blue-600 hover:bg-blue-700'} text-white px-6 py-2.5 rounded-lg font-medium transition-colors flex items-center justify-center gap-2 shadow-md hover:shadow-lg`}
               >
                 <QrCode size={20} />
-                QR 코드 신규 등록
+                {showInlineCreateForm ? '신규 등록 닫기' : '패널 신규 등록'}
               </button>
             </div>
           </div>
+
+          {/* Inline Create Form - 패널 신규 등록 */}
+          {showInlineCreateForm && (
+            <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 border-l-4 border-l-blue-500">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-lg font-semibold text-slate-800 flex items-center gap-2">
+                  <QrCode size={20} className="text-blue-600" />
+                  신규 패널 등록
+                </h2>
+                <button
+                  onClick={() => {
+                    setShowInlineCreateForm(false);
+                    resetForm();
+                  }}
+                  className="p-2 hover:bg-slate-100 rounded-lg text-slate-600 transition-colors"
+                  title="닫기"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div className="space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-700 mb-2 flex items-center gap-2">
+                      <FileText size={16} />
+                      PNL NO.
+                    </label>
+                    <input
+                      type="text"
+                      value={qrData.id}
+                      onChange={(e) => handleInputChange('id', e.target.value)}
+                      placeholder="예: 1-1 또는 2-1"
+                      className="w-full rounded-lg border-slate-300 border px-4 py-2.5 text-slate-700 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-700 mb-2 flex items-center gap-2">
+                      <Building2 size={16} />
+                      층수
+                    </label>
+                    <select
+                      value={qrData.floor || selectedFloor}
+                      onChange={(e) => {
+                        handleInputChange('floor', e.target.value);
+                        setSelectedFloor(e.target.value as 'F1' | 'B1');
+                      }}
+                      className="w-full rounded-lg border-slate-300 border px-4 py-2.5 text-slate-700 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all cursor-pointer bg-white"
+                    >
+                      <option value="F1">F1</option>
+                      <option value="B1">B1</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-700 mb-2 flex items-center gap-2">
+                      <MapPin size={16} />
+                      TR
+                    </label>
+                    <select
+                      value={isValidTR(qrData.location) ? qrData.location : 'A'}
+                      onChange={(e) => handleInputChange('location', e.target.value)}
+                      className="w-full rounded-lg border-slate-300 border px-4 py-2.5 text-slate-700 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none bg-white cursor-pointer"
+                    >
+                      {TR_OPTIONS.map((opt) => (
+                        <option key={opt} value={opt}>{TR_DISPLAY_LABELS[opt]}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-700 mb-2">
+                      관리번호 (판넬명)
+                    </label>
+                    <input
+                      type="text"
+                      value={qrData.position}
+                      onChange={(e) => handleInputChange('position', e.target.value)}
+                      placeholder="판넬명 입력"
+                      className="w-full rounded-lg border-slate-300 border px-4 py-2.5 text-slate-700 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  {/* 시공사 (고정값) */}
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-700 mb-2">
+                      시공사
+                    </label>
+                    <input
+                      type="text"
+                      value="삼성물산"
+                      disabled
+                      className="w-full rounded-lg border-slate-300 border px-4 py-2.5 text-slate-500 bg-slate-100 cursor-not-allowed"
+                    />
+                  </div>
+
+                  {/* PJT명 (고정값) */}
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-700 mb-2">
+                      PJT명
+                    </label>
+                    <input
+                      type="text"
+                      value="성수동 K-PJT"
+                      disabled
+                      className="w-full rounded-lg border-slate-300 border px-4 py-2.5 text-slate-500 bg-slate-100 cursor-not-allowed"
+                    />
+                  </div>
+
+                  {/* 공칭 단면적 - Key-in with SQ unit */}
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-700 mb-2">
+                      공칭 단면적
+                    </label>
+                    <div className="flex">
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.1"
+                        placeholder="단면적 입력"
+                        className="flex-1 rounded-l-lg border-slate-300 border px-4 py-2.5 text-slate-700 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all"
+                      />
+                      <span className="bg-slate-200 border border-l-0 border-slate-300 px-4 py-2.5 rounded-r-lg text-slate-600 font-medium">
+                        SQ
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-700 mb-2">
+                      X 좌표 (0-100%)
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      max="100"
+                      step="0.1"
+                      value={qrData.positionX}
+                      onChange={(e) => handleInputChange('positionX', e.target.value)}
+                      placeholder="예: 25"
+                      className="w-full rounded-lg border-slate-300 border px-4 py-2.5 text-slate-700 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all"
+                    />
+                    <p className="text-xs text-slate-500 mt-1">Dashboard 위치 매핑용</p>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-700 mb-2">
+                      Y 좌표 (0-100%)
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      max="100"
+                      step="0.1"
+                      value={qrData.positionY}
+                      onChange={(e) => handleInputChange('positionY', e.target.value)}
+                      placeholder="예: 30"
+                      className="w-full rounded-lg border-slate-300 border px-4 py-2.5 text-slate-700 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all"
+                    />
+                    <p className="text-xs text-slate-500 mt-1">Dashboard 위치 매핑용</p>
+                  </div>
+                </div>
+
+                <div className="flex gap-3 pt-2">
+                  <button
+                    onClick={() => {
+                      generateQR();
+                      setShowInlineCreateForm(false);
+                    }}
+                    disabled={!qrData.location || !qrData.floor}
+                    className="flex-1 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white px-6 py-3 rounded-lg font-medium transition-colors flex items-center justify-center gap-2"
+                  >
+                    <QrCode size={18} />
+                    QR 코드 생성 및 등록
+                  </button>
+                  <button
+                    onClick={() => {
+                      setShowInlineCreateForm(false);
+                      resetForm();
+                    }}
+                    className="px-6 py-3 rounded-lg border border-slate-300 text-slate-700 font-medium hover:bg-slate-50 transition-colors"
+                  >
+                    취소
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
         {/* Input Form Modal */}
         {showCreateModal && showForm && createPortal(
@@ -1543,7 +1756,7 @@ const QRGenerator: React.FC<QRGeneratorProps> = ({
               >
                 <div className="p-6" style={{ overflow: 'visible', position: 'relative', zIndex: 1 }}>
                   <div className="flex items-center justify-between mb-4">
-                    <h2 className="text-lg font-semibold text-slate-800">QR 코드 신규 등록</h2>
+                    <h2 className="text-lg font-semibold text-slate-800">패널 신규 등록</h2>
                     <button
                       onClick={() => {
                         setShowCreateModal(false);
@@ -1768,17 +1981,17 @@ const QRGenerator: React.FC<QRGeneratorProps> = ({
 
         {/* QR 상세/신규 폼: 신규 등록 시와 선택된 QR 수정 시 제목 구분 */}
         {((showForm && !selectedQR) || (selectedQR && selectedQRId)) && (
-            <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+            <div ref={panelDetailSectionRef} className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
             <h2 className="text-lg font-semibold text-slate-800 mb-4 flex items-center gap-2">
               {selectedQR ? (
                 <>
                   <Eye size={20} />
-                  선택된 QR 코드 상세 정보
+                  선택된 패널 상세 정보
                 </>
               ) : (
                 <>
                   <QrCode size={20} />
-                  신규 QR 코드 등록
+                  패널 신규 등록
                 </>
               )}
             </h2>
