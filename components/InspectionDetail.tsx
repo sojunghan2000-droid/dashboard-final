@@ -430,7 +430,7 @@ const InspectionDetail: React.FC<InspectionDetailProps> = ({ record, onSave, onG
     });
   }, []);
 
-  const handleBasicInfoChange = useCallback((field: string, value: string) => {
+  const handleBasicInfoChange = useCallback((field: string, value: string | number) => {
     setFormData(prev => ({ ...prev, [field]: value }));
   }, []);
 
@@ -760,12 +760,49 @@ const InspectionDetail: React.FC<InspectionDetailProps> = ({ record, onSave, onG
             </div>
           </div>
 
+          {/* 전류 (A) - 후크메가 */}
+          <div className="mb-4">
+            <label className="block text-sm font-semibold text-slate-700 mb-2">전류 (A) - 후크메가</label>
+            <div className="grid grid-cols-3 gap-2">
+              <div>
+                <label className="block text-xs text-slate-500 mb-1">L1</label>
+                <input
+                  type="number"
+                  step="0.1"
+                  value={formData.currentL1 ?? 0}
+                  onChange={(e) => handleBasicInfoChange('currentL1', parseFloat(e.target.value) || 0)}
+                  className="w-full rounded border-slate-300 border px-2 py-1.5 text-sm text-slate-700 focus:ring-1 focus:ring-blue-500 outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-slate-500 mb-1">L2</label>
+                <input
+                  type="number"
+                  step="0.1"
+                  value={formData.currentL2 ?? 0}
+                  onChange={(e) => handleBasicInfoChange('currentL2', parseFloat(e.target.value) || 0)}
+                  className="w-full rounded border-slate-300 border px-2 py-1.5 text-sm text-slate-700 focus:ring-1 focus:ring-blue-500 outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-slate-500 mb-1">L3</label>
+                <input
+                  type="number"
+                  step="0.1"
+                  value={formData.currentL3 ?? 0}
+                  onChange={(e) => handleBasicInfoChange('currentL3', parseFloat(e.target.value) || 0)}
+                  className="w-full rounded border-slate-300 border px-2 py-1.5 text-sm text-slate-700 focus:ring-1 focus:ring-blue-500 outline-none"
+                />
+              </div>
+            </div>
+          </div>
+
           {/* 상태 및 점검일 */}
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-semibold text-slate-700 mb-2">상태</label>
-              <select 
-                value={formData.status} 
+              <select
+                value={formData.status}
                 onChange={handleStatusChange}
                 className="w-full rounded-lg border-slate-300 border px-3 py-2 text-slate-700 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all"
                 style={{ pointerEvents: 'auto', zIndex: 9999, position: 'relative' }}
@@ -777,9 +814,9 @@ const InspectionDetail: React.FC<InspectionDetailProps> = ({ record, onSave, onG
             </div>
             <div>
               <label className="block text-sm font-semibold text-slate-700 mb-2">점검일</label>
-              <input 
-                type="text" 
-                value={formData.lastInspectionDate} 
+              <input
+                type="text"
+                value={formData.lastInspectionDate}
                 onChange={(e) => handleBasicInfoChange('lastInspectionDate', e.target.value)}
                 className="w-full rounded-lg border-slate-300 border px-3 py-2 text-slate-700 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
                 placeholder="예: 2024-05-20 09:30:45"

@@ -58,6 +58,9 @@ export interface InspectionRecord {
   contractor?: string; // 시공사
   managementNumber?: string; // 관리번호 (판넬명)
   breakers?: BreakerInfo[]; // 차단기 정보 배열
+  currentL1?: number; // 전류 (A) - 후크메가 L1
+  currentL2?: number; // 전류 (A) - 후크메가 L2
+  currentL3?: number; // 전류 (A) - 후크메가 L3
   grounding?: '양호' | '불량' | '미점검'; // 접지 (외관 점검)
   thermalImage?: ThermalImageData; // 열화상 측정 데이터
   loadSummary?: LoadSummary; // 부하 합계 정보
