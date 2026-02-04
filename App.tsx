@@ -14,21 +14,42 @@ import { exportToExcel } from './services/excelService';
 import ExportReviewModal from './components/ExportReviewModal';
 import * as XLSX from 'xlsx';
 
-/** PNL NO. 형식: 층 1=F1, 2=F2, 3=F3, 4=F4, 5=F5, 6=F6, 7=B1, 8=B2 / TR 1=A, 2=B, 3=C, 4=D. 80% F1 또는 B1, 20% 그 외 층 */
+/** 성수동 K-PJT 현장 가설용 가설 분전반 계통 ('25.12.30 기준, 총 65면)
+ * TR-1 (A) 900KVA → floor='F1', TR-2 (B) 950KVA → floor='B1' */
+const DL = { welder: false, grinder: false, light: false, pump: false }; // 기본 loads
+const P = (pno: string, tr: 'A'|'B', sq: string, parent?: string, notes?: string): InspectionRecord => ({
+  panelNo: pno, status: 'Pending', lastInspectionDate: '-', loads: { ...DL }, photoUrl: null, memo: '',
+  tr, floor: tr === 'A' ? 'F1' : 'B1', nominalCrossSection: sq,
+  ...(parent ? { parentPanelNo: parent } : {}), ...(notes ? { notes } : {}),
+});
 const MOCK_DATA: InspectionRecord[] = [
-  { panelNo: '1', status: 'Complete', lastInspectionDate: '2024-05-20 09:30', loads: { welder: true, grinder: false, light: true, pump: false }, photoUrl: 'https://picsum.photos/400/300?random=1', memo: 'All connections secure.', position: { x: 25, y: 30 } },
-  { panelNo: '1-1', status: 'Complete', lastInspectionDate: '2024-05-20 10:15', loads: { welder: false, grinder: true, light: true, pump: false }, photoUrl: 'https://picsum.photos/400/300?random=2', memo: '', position: { x: 75, y: 25 } },
-  { panelNo: '1-2', status: 'In Progress', lastInspectionDate: '2024-05-21 08:00', loads: { welder: false, grinder: false, light: true, pump: true }, photoUrl: null, memo: 'Check ground fault interrupter.', position: { x: 50, y: 50 } },
-  { panelNo: '7', status: 'Pending', lastInspectionDate: '-', loads: { welder: false, grinder: false, light: false, pump: false }, photoUrl: null, memo: '', position: { x: 15, y: 70 } },
-  { panelNo: '7-1', status: 'Pending', lastInspectionDate: '-', loads: { welder: false, grinder: false, light: false, pump: false }, photoUrl: null, memo: '', position: { x: 85, y: 75 } },
-  { panelNo: '1-3', status: 'Complete', lastInspectionDate: '2024-05-22 14:20', loads: { welder: true, grinder: true, light: false, pump: false }, photoUrl: null, memo: 'Regular maintenance completed.', position: { x: 30, y: 60 } },
-  { panelNo: '1-4', status: 'In Progress', lastInspectionDate: '2024-05-23 11:00', loads: { welder: false, grinder: false, light: true, pump: true }, photoUrl: null, memo: 'Inspection in progress.', position: { x: 60, y: 40 } },
-  { panelNo: '3-1', status: 'Pending', lastInspectionDate: '-', loads: { welder: false, grinder: false, light: false, pump: false }, photoUrl: null, memo: '', position: { x: 40, y: 20 } },
-  { panelNo: '7-2', status: 'Complete', lastInspectionDate: '2024-05-19 16:45', loads: { welder: true, grinder: false, light: true, pump: true }, photoUrl: null, memo: 'All systems operational.', position: { x: 70, y: 60 } },
-  { panelNo: '1-5', status: 'In Progress', lastInspectionDate: '2024-05-24 09:15', loads: { welder: false, grinder: true, light: false, pump: false }, photoUrl: null, memo: 'Pending review.', position: { x: 20, y: 45 } },
-  { panelNo: '8-1', status: 'Pending', lastInspectionDate: '-', loads: { welder: false, grinder: false, light: false, pump: false }, photoUrl: null, memo: '', position: { x: 90, y: 50 } },
-  { panelNo: '1-6', status: 'Complete', lastInspectionDate: '2024-05-18 13:30', loads: { welder: false, grinder: false, light: true, pump: false }, photoUrl: null, memo: 'Lighting system checked.', position: { x: 35, y: 80 } },
-  { panelNo: '7-3', status: 'In Progress', lastInspectionDate: '2024-05-25 10:00', loads: { welder: true, grinder: true, light: true, pump: false }, photoUrl: null, memo: 'Multiple loads connected.', position: { x: 65, y: 15 } },
+  // === TR-1 (A) 900KVA — F1 ===
+  P('1','A','95SQ'), P('1-1','A','95SQ','1'), P('1-2','A','50SQ','1'), P('1-2-1','A','50SQ','1-2'),
+  P('2','A','95SQ'),
+  P('3','A','95SQ'), P('3-1','A','50SQ','3'), P('3-1-1','A','16SQ','3-1'), P('3-1-2','A','35SQ','3-1'),
+  P('3-1충전부','A','95SQ','3-1','충전부'), P('3-1충전부-1','A','50SQ','3-1충전부','충전부'),
+  P('3-2','A','50SQ','3','양수기'),
+  P('4','A','95SQ'), P('4-1','A','35SQ','4'),
+  P('5','A','95SQ'), P('5-1','A','35SQ','5'), P('5-2','A','95SQ','5'),
+  P('5-2-1','A','50SQ','5-2','전력량계'), P('5-2-2','A','50SQ','5-2','전력량계'), P('5-2-2-1','A','50SQ','5-2-2'),
+  P('7','A','150SQ',undefined,'T/C1(L)'), P('7-1','A','95SQ','7'), P('7-1-1','A','16SQ','7-1'),
+  P('7-2','A','95SQ','7'), P('7-2-1','A','16SQ','7-2'), P('7-3','A','95SQ','7'), P('7-4','A','95SQ','7'),
+  P('8','A','300SQ',undefined,'T/C4'), P('9','A','300SQ',undefined,'T/C1'),
+  P('16','A','95SQ'), P('16-1','A','95SQ','16'), P('16-2','A','95SQ','16'),
+  // === TR-2 (B) 950KVA — B1 ===
+  P('6','B','300SQ'), P('6-1','B','150SQ','6'), P('6-1-1','B','95SQ','6-1'), P('6-1-2','B','95SQ','6-1'),
+  P('6-1-2-1','B','150SQ','6-1-2'), P('6-1-3','B','95SQ','6-1'), P('6-1-3-1','B','95SQ','6-1-3','양수기'),
+  P('6-2','B','150SQ','6'), P('6-2-1','B','95SQ','6-2'), P('6-2-2','B','95SQ','6-2'),
+  P('6-2-2-1','B','95SQ','6-2-2','T/C4(L)'), P('6-2-2-2','B','16SQ','6-2-2'),
+  P('6-2-3','B','95SQ','6-2'), P('6-2-3-1','B','95SQ','6-2-3'),
+  P('10','B','300SQ',undefined,'T/C2'), P('11','B','150SQ',undefined,'T/C2(L)'),
+  P('11-1','B','95SQ','11'), P('11-1-1','B','16SQ','11-1'), P('11-1-2','B','95SQ','11-1'),
+  P('11-2','B','95SQ','11'), P('11-3','B','95SQ','11'),
+  P('12','B','185SQ',undefined,'T/C3(L)'), P('12-1','B','95SQ','12'), P('12-1-1','B','16SQ','12-1'),
+  P('12-2','B','95SQ','12'), P('12-3','B','95SQ','12'),
+  P('13','B','150SQ'), P('13-1','B','95SQ','13'),
+  P('14','B','300SQ',undefined,'T/C3'),
+  P('15','B','150SQ'), P('15-1','B','50SQ','15'), P('15-2','B','50SQ','15'),
 ];
 
 type Page = 'dashboard' | 'dashboard-overview' | 'reports' | 'qr-generator';

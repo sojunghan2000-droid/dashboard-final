@@ -61,6 +61,11 @@ export interface InspectionRecord {
   currentL1?: number; // 전류 (A) - 후크메가 L1
   currentL2?: number; // 전류 (A) - 후크메가 L2
   currentL3?: number; // 전류 (A) - 후크메가 L3
+  tr?: string; // TR: 'A' (TR-1 900KVA) 또는 'B' (TR-2 950KVA)
+  floor?: string; // 명시적 층수: 'F1'~'F6', 'B1', 'B2'
+  nominalCrossSection?: string; // 공칭 단면적 (예: '95SQ', '300SQ')
+  parentPanelNo?: string; // 상위 패널 번호
+  notes?: string; // 비고 (T/C1(L), 양수기, 전력량계 등)
   grounding?: '양호' | '불량' | '미점검'; // 접지 (외관 점검)
   thermalImage?: ThermalImageData; // 열화상 측정 데이터
   loadSummary?: LoadSummary; // 부하 합계 정보

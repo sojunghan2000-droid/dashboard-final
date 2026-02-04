@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { QRCodeSVG } from 'qrcode.react';
-import { QrCode, Download, Printer, MapPin, Building2, FileText, Calendar, Trash2, Eye, Edit2, X, Save } from 'lucide-react';
+import { QrCode, Download, Printer, MapPin, Building2, FileText, Calendar, Trash2, Eye, Edit2, X, Save, Search, ArrowUpDown } from 'lucide-react';
 import { QRCodeData, InspectionRecord } from '../types';
 import FloorPlanView from './FloorPlanView';
 
@@ -115,6 +115,9 @@ const QRGenerator: React.FC<QRGeneratorProps> = ({
   const [showQRModal, setShowQRModal] = useState(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showInlineCreateForm, setShowInlineCreateForm] = useState(false);
+  const [sortField, setSortField] = useState<'panelNo'|'createdAt'|'tr'|'floor'>('panelNo');
+  const [sortDirection, setSortDirection] = useState<'asc'|'desc'>('asc');
+  const [searchText, setSearchText] = useState('');
   /** true일 때만 FloorPlanView 상세 패널(모달) 표시 - "Dashboard에 위치 매핑" 클릭 시 true */
   const [openDetailPanelForMapping, setOpenDetailPanelForMapping] = useState(false);
   const rightPanelScrollRef = useRef<HTMLDivElement>(null);
@@ -1309,6 +1312,51 @@ const QRGenerator: React.FC<QRGeneratorProps> = ({
     return map;
   }, [qrCodes]);
 
+  // 자연 정렬 비교 함수 (1, 1-1, 1-2, 2, 3, ... 숫자 기반)
+  const naturalCompare = useCallback((a: string, b: string): number => {
+    const pa = a.split(/[-]/).map(s => { const n = parseInt(s); return isNaN(n) ? s : n; });
+    const pb = b.split(/[-]/).map(s => { const n = parseInt(s); return isNaN(n) ? s : n; });
+    for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+      const va = pa[i] ?? -1, vb = pb[i] ?? -1;
+      if (typeof va === 'number' && typeof vb === 'number') { if (va !== vb) return va - vb; }
+      else { const cmp = String(va).localeCompare(String(vb)); if (cmp !== 0) return cmp; }
+    }
+    return 0;
+  }, []);
+
+  // 정렬된 inspections
+  const sortedInspections = useMemo(() => {
+    const deduped = inspections.filter((ins, idx, self) => idx === self.findIndex(i => i.panelNo === ins.panelNo));
+    const sorted = [...deduped].sort((a, b) => {
+      let cmp = 0;
+      switch (sortField) {
+        case 'panelNo': cmp = naturalCompare(a.panelNo, b.panelNo); break;
+        case 'createdAt': {
+          const qa = qrCodeMap.get(a.panelNo), qb = qrCodeMap.get(b.panelNo);
+          cmp = (qa?.createdAt || '').localeCompare(qb?.createdAt || ''); break;
+        }
+        case 'tr': cmp = (a.tr || '').localeCompare(b.tr || ''); break;
+        case 'floor': cmp = (a.floor || '').localeCompare(b.floor || ''); break;
+      }
+      return sortDirection === 'asc' ? cmp : -cmp;
+    });
+    return sorted;
+  }, [inspections, sortField, sortDirection, qrCodeMap, naturalCompare]);
+
+  // 검색 필터링된 inspections
+  const filteredInspections = useMemo(() => {
+    if (!searchText.trim()) return sortedInspections;
+    const q = searchText.trim().toLowerCase();
+    return sortedInspections.filter(ins =>
+      ins.panelNo.toLowerCase().includes(q) ||
+      (ins.tr || '').toLowerCase().includes(q) ||
+      (ins.floor || '').toLowerCase().includes(q) ||
+      (ins.notes || '').toLowerCase().includes(q) ||
+      (ins.nominalCrossSection || '').toLowerCase().includes(q) ||
+      (TR_DISPLAY_LABELS[ins.tr || ''] || '').toLowerCase().includes(q)
+    );
+  }, [sortedInspections, searchText]);
+
   // 선택된 QR의 ID 추출 최적화
   const selectedQRId = useMemo(() => {
     if (selectedQR) {
@@ -1399,22 +1447,37 @@ const QRGenerator: React.FC<QRGeneratorProps> = ({
     <div className="h-full flex bg-slate-50" style={{ overflow: isSelectFocused ? 'visible' : 'hidden' }}>
       {/* Left Panel: QR List */}
       <div className="w-1/3 border-r border-slate-200 bg-white overflow-y-auto">
-        <div className="p-4 border-b border-slate-200 bg-slate-50">
-          <h2 className="text-lg font-semibold text-slate-800 mb-1">등록 분전함</h2>
-          <p className="text-sm text-slate-600">{inspections.length}개</p>
+        <div className="p-3 border-b border-slate-200 bg-slate-50">
+          <div className="flex items-center justify-between mb-2">
+            <h2 className="text-lg font-semibold text-slate-800">등록 분전함</h2>
+            <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full font-medium">{filteredInspections.length}/{inspections.length}</span>
+          </div>
+          {/* 정렬 버튼 + 검색 */}
+          <div className="flex items-center gap-1 mb-2 flex-wrap">
+            {(['panelNo','tr','floor','createdAt'] as const).map(f => (
+              <button key={f} onClick={() => { if (sortField === f) setSortDirection(d => d === 'asc' ? 'desc' : 'asc'); else { setSortField(f); setSortDirection('asc'); } }}
+                className={`text-[10px] px-2 py-1 rounded-full border transition-colors ${sortField === f ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-100'}`}>
+                {f === 'panelNo' ? 'PNL NO.' : f === 'tr' ? 'TR' : f === 'floor' ? '층수' : '생성일'}
+                {sortField === f && <span className="ml-0.5">{sortDirection === 'asc' ? '↑' : '↓'}</span>}
+              </button>
+            ))}
+          </div>
+          <div className="relative">
+            <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input type="text" value={searchText} onChange={e => setSearchText(e.target.value)}
+              placeholder="PNL NO., TR, 층수 검색..."
+              className="w-full pl-8 pr-3 py-1.5 text-xs rounded-lg border border-slate-300 focus:ring-1 focus:ring-blue-500 focus:border-blue-500 outline-none" />
+          </div>
         </div>
 
-        {inspections.length === 0 ? (
+        {filteredInspections.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-slate-400 p-8">
             <QrCode size={48} className="mb-4 opacity-50" />
-            <p className="text-sm text-center">등록 분전함이 없습니다</p>
+            <p className="text-sm text-center">{searchText ? '검색 결과가 없습니다' : '등록 분전함이 없습니다'}</p>
           </div>
         ) : (
           <div className="divide-y divide-slate-100">
-            {inspections
-              .filter((inspection, index, self) => 
-                index === self.findIndex(i => i.panelNo === inspection.panelNo)
-              )
+            {filteredInspections
               .map((inspection, index) => {
               const matchingQR = qrCodeMap.get(inspection.panelNo);
               const isSelected = selectedQRId === inspection.panelNo;
@@ -1452,20 +1515,24 @@ const QRGenerator: React.FC<QRGeneratorProps> = ({
                   <div className="flex items-start justify-between">
                     <div className="flex-1">
                       <div className="flex items-center gap-2 mb-1">
-                        <MapPin size={14} className="text-blue-600" />
+                        <MapPin size={14} className={inspection.tr === 'A' ? 'text-blue-600' : inspection.tr === 'B' ? 'text-orange-500' : 'text-slate-400'} />
                         <span className="font-semibold text-slate-800">
                           {migrateIdFloor(inspection.panelNo)}
                         </span>
+                        {inspection.nominalCrossSection && (
+                          <span className="text-[10px] bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded">{inspection.nominalCrossSection}</span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 text-xs text-slate-500">
+                        {inspection.floor && <span>{inspection.floor}</span>}
+                        {inspection.tr && <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${inspection.tr === 'A' ? 'bg-blue-100 text-blue-700' : 'bg-orange-100 text-orange-700'}`}>{TR_DISPLAY_LABELS[inspection.tr] || inspection.tr}</span>}
+                        {inspection.notes && <span className="text-slate-400">({inspection.notes})</span>}
                       </div>
                       {matchingQR && (
-                        <>
-                          <p className="text-sm text-slate-600 mb-1">{floorToDisplayLabel(matchingQR.floor)}</p>
-                          <p className="text-xs text-slate-500 line-clamp-1">{matchingQR.location}</p>
-                          <div className="flex items-center gap-1 mt-2 text-xs text-slate-400">
-                            <Calendar size={12} />
-                            <span>{formatDate(matchingQR.createdAt)}</span>
-                          </div>
-                        </>
+                        <div className="flex items-center gap-1 mt-1 text-xs text-slate-400">
+                          <Calendar size={12} />
+                          <span>{formatDate(matchingQR.createdAt)}</span>
+                        </div>
                       )}
                     </div>
                     {matchingQR && (
@@ -2318,7 +2385,7 @@ const QRGenerator: React.FC<QRGeneratorProps> = ({
 
         {/* Floor Plan View - 마지막 순서로 배치 */}
         <FloorPlanView
-          inspections={inspections}
+          inspections={filteredInspections}
           onSelectInspection={(inspection) => {
             if (onSelectInspection) {
               onSelectInspection(inspection.panelNo);

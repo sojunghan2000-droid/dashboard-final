@@ -366,29 +366,19 @@ const FloorPlanView: React.FC<FloorPlanViewProps> = ({
 
 
   /** TR 기준 색상 반환: TR-1 (A) = 파란색, TR-2 (B) = 주황색 */
-  const getTRColor = (panelNo: string, qrCodes: QRCodeData[]): string => {
-    // PNL NO.에서 TR 추출 (형식: 1-1, 1-2, 7-1, 7-2 → 두 번째 숫자가 1=A=TR-1, 2=B=TR-2)
-    const parts = panelNo.trim().split('-');
-    if (parts.length >= 2) {
-      const trNum = parts[1]?.trim();
-      if (trNum === '1') return '#3b82f6'; // TR-1 (A) - 파란색
-      if (trNum === '2') return '#f97316'; // TR-2 (B) - 주황색
-    }
+  const getTRColor = (panelNo: string, qrCodes: QRCodeData[], inspection?: InspectionRecord): string => {
+    // 1. inspection.tr 필드 우선 확인 (명시적 TR 값)
+    if (inspection?.tr === 'A') return '#3b82f6'; // TR-1 파란색
+    if (inspection?.tr === 'B') return '#f97316'; // TR-2 주황색
 
-    // QR 코드에서 location 확인
+    // 2. QR 코드에서 location 확인
     const matchingQR = qrCodes.find(qr => {
-      try {
-        const qrData = JSON.parse(qr.qrData);
-        return qrData.id === panelNo;
-      } catch {
-        return false;
-      }
+      try { return JSON.parse(qr.qrData).id === panelNo; } catch { return false; }
     });
-
     if (matchingQR) {
-      const location = matchingQR.location?.toUpperCase();
-      if (location === 'A' || location === '1') return '#3b82f6'; // TR-1 (A) - 파란색
-      if (location === 'B' || location === '2') return '#f97316'; // TR-2 (B) - 주황색
+      const loc = matchingQR.location?.toUpperCase();
+      if (loc === 'A' || loc === '1') return '#3b82f6';
+      if (loc === 'B' || loc === '2') return '#f97316';
     }
 
     return '#94a3b8'; // 기본 회색
@@ -589,12 +579,15 @@ const FloorPlanView: React.FC<FloorPlanViewProps> = ({
       if (inspection.position) {
         const qrLocation = qrMapByInspectionId.get(inspection.panelNo);
         
-        // 층수 필터링: QR 코드의 층수 정보와 선택된 층이 일치하는 경우만 표시
+        // 층수 필터링: inspection.floor → QR floor → panelNo 추출 순서
         let shouldShow = false;
         let markerFloor: string | null = null;
-        
-        if (qrLocation) {
-          // QR 코드에 층수 정보가 있으면 그것을 사용
+
+        // 1. inspection.floor 명시적 필드 우선
+        if (inspection.floor) {
+          markerFloor = inspection.floor;
+        } else if (qrLocation) {
+          // 2. QR 코드에 층수 정보가 있으면 사용
           markerFloor = qrLocation.floor;
         } else {
           // QR 코드 정보가 없으면 propQrCodes에서 직접 확인
@@ -746,7 +739,7 @@ const FloorPlanView: React.FC<FloorPlanViewProps> = ({
             const { x, y } = marker.position;
             const inspection = marker.data;
             // TR 기준 색상 사용 (TR-1 = 파란색, TR-2 = 주황색)
-            const trColor = getTRColor(inspection.panelNo, propQrCodes);
+            const trColor = getTRColor(inspection.panelNo, propQrCodes, inspection);
             const isSelected = selectedInspection?.panelNo === marker.id;
             const isHovered = hoveredInspection?.panelNo === marker.id;
 
