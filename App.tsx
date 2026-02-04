@@ -171,20 +171,19 @@ const App: React.FC = () => {
     const loadData = async () => {
       try {
         setIsLoading(true);
-        await initIndexedDB();
-
-        // Inspections 로드: IndexedDB + MOCK_DATA 머지 (새 패널 자동 추가)
-        const loadedInspections = await getAllInspectionsWithPhotos();
-        const existingPanelNos = new Set(loadedInspections.map(i => i.panelNo));
-        const newFromMock = MOCK_DATA.filter(m => !existingPanelNos.has(m.panelNo));
-        const merged = [...loadedInspections, ...newFromMock];
-        setInspections(merged.map(item => ensurePosition(item)));
-
-        // QR Codes 로드 (초기 로드이므로 IndexedDB 저장 없이 직접 state 설정)
-        const loadedQRCodes = await getAllQRCodes();
-        if (loadedQRCodes.length > 0) {
-          setQrCodesState(loadedQRCodes);
+        // 기존 캐시 삭제 후 MOCK_DATA 65면으로 초기화
+        const db = await initIndexedDB();
+        if (db) {
+          try {
+            const tx = db.transaction(['inspections', 'photos', 'qrCodes'], 'readwrite');
+            await tx.objectStore('inspections').clear();
+            await tx.objectStore('photos').clear();
+            await tx.objectStore('qrCodes').clear();
+            await tx.done;
+          } catch (e) { console.warn('캐시 클리어 오류 (무시):', e); }
         }
+        setInspections(MOCK_DATA.map(item => ensurePosition(item)));
+        setQrCodesState([]);
       } catch (error) {
         console.error('IndexedDB 로드 오류:', error);
         // 오류 발생 시 MOCK_DATA 사용
