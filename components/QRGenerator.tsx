@@ -99,7 +99,7 @@ const QRGenerator: React.FC<QRGeneratorProps> = ({
 
   const [selectedFloor, setSelectedFloor] = useState<'F1' | 'B1'>('F1');
   const [qrData, setQrData] = useState<QRData>({
-    id: 'A', // PNL NO. 초기값
+    id: '', // PNL NO. 자유 입력 (예: 1, 1-1, 1-1-1)
     location: 'A',
     floor: 'F1',
     position: '',
@@ -878,7 +878,7 @@ const QRGenerator: React.FC<QRGeneratorProps> = ({
       if (selectedQR?.id === id) {
         setSelectedQR(null);
         setGeneratedQR(null);
-        setQrData({ id: 'A', location: 'A', floor: 'F1', position: '', positionX: '', positionY: '' });
+        setQrData({ id: '', location: 'A', floor: 'F1', position: '', positionX: '', positionY: '' });
         setIsEditing(false);
       }
     }
@@ -1246,7 +1246,7 @@ const QRGenerator: React.FC<QRGeneratorProps> = ({
 
   const resetForm = () => {
     setQrData({
-      id: 'A',
+      id: '',
       location: 'A',
       floor: 'F1',
       position: '',
